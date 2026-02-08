@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Upload Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            max-width: 600px;
+            margin: 0 auto;
+        }
+
+        .drop-zone {
+            border: 2px dashed #ccc;
+            padding: 40px;
+            text-align: center;
+            margin: 20px 0;
+            cursor: pointer;
+        }
+
+        .drop-zone.drag-over {
+            background: #f0f0f0;
+            border-color: #666;
+        }
+
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+
+        #log {
+            margin-top: 20px;
+            padding: 10px;
+            background: #f5f5f5;
+            border: 1px solid #ddd;
+            min-height: 100px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+    </style>
+</head>
+
+<body>
+    <h1>Upload Functionality Test</h1>
+
+    <button id="upload-btn">Click to Upload PDF</button>
+
+    <div id="drop-zone" class="drop-zone">
+        <h3>Drag & Drop PDF Files Here</h3>
+        <p>or click the Upload PDF button</p>
+    </div>
+
+    <div id="log"></div>
+
+    <script>
+        const log = document.getElementById('log');
+
+        function addLog(message) {
+            const time = new Date().toLocaleTimeString();
+            log.innerHTML += `[${time}] ${message}<br>`;
+            console.log(message);
+        }
+
+        addLog('Script loaded');
+
+        // Upload button
+        const uploadBtn = document.getElementById('upload-btn');
+        uploadBtn.addEventListener('click', () => {
+            addLog('Upload button clicked');
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = 'application/pdf';
+            input.multiple = true;
+
+            input.onchange = (e) => {
+                addLog(`Files selected: ${e.target.files.length}`);
+                Array.from(e.target.files).forEach(file => {
+                    addLog(`- ${file.name} (${file.type})`);
+                });
+            };
+
+            input.click();
+        });
+
+        // Drag and drop
+        const dropZone = document.getElementById('drop-zone');
+
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('drag-over');
+            addLog('Drag over');
+        });
+
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('drag-over');
+            addLog('Drag leave');
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('drag-over');
+            addLog(`Files dropped: ${e.dataTransfer.files.length}`);
+            Array.from(e.dataTransfer.files).forEach(file => {
+                addLog(`- ${file.name} (${file.type})`);
+            });
+        });
+
+        dropZone.addEventListener('click', () => {
+            addLog('Drop zone clicked');
+            uploadBtn.click();
+        });
+
+        addLog('Event listeners attached');
+    </script>
+</body>
+
+</html>
