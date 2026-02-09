@@ -14,13 +14,16 @@ const WB_TOOLS = {
     ARROW: "arrow",
     TEXT: "text",
     STICKY: "sticky",
-    LASER: "laser"
+    LASER: "laser",
+    LASSO: "lasso",
+    PAN: "pan"
 };
 
 const WB_PEN_PRESETS = {
     pen: { width: 2, opacity: 1, cap: "round", join: "round" },
-    marker: { width: 6, opacity: 1, cap: "square", join: "round" },
-    highlighter: { width: 20, opacity: 0.35, cap: "butt", join: "round" }
+    marker: { width: 6, opacity: 0.7, cap: "round", join: "round" },
+    highlighter: { width: 20, opacity: 0.4, cap: "butt", join: "round" },
+    eraser: { width: 20, opacity: 1, cap: "round", join: "round" }
 };
 
 const WB_COLORS = [
@@ -64,6 +67,32 @@ class Whiteboard {
 
         this.stickyNotes = [];
         this.draggingSticky = null;
+
+        // PDF annotation state
+        this.pdfDocument = null;
+        this.pdfFileId = null;
+        this.pdfFileName = null;
+        this.pdfSubject = null;
+        this.pdfPages = [];
+
+        // Lasso tool state
+        this.selectedStrokes = [];
+        this.lassoPath = [];
+        this.isDraggingSelection = false;
+        this.selectionOffset = { x: 0, y: 0 };
+
+        // Pan tool state
+        this.isPanning = false;
+        this.panStart = { x: 0, y: 0 };
+        this.panOffset = { x: 0, y: 0 };
+
+        // Shape selection state
+        this.selectedShape = null;
+        this.isDraggingShape = false;
+        this.isResizingShape = false;
+        this.resizeHandle = null; // 'nw', 'ne', 'sw', 'se', 'n', 's', 'e', 'w'
+        this.dragStartPos = null;
+        this.shapeOriginalBounds = null;
 
         this.init();
     }
@@ -174,9 +203,24 @@ class Whiteboard {
             else btn.classList.remove('active');
         });
 
+        // Update stroke properties from preset if available
+        if (WB_PEN_PRESETS[tool]) {
+            const preset = WB_PEN_PRESETS[tool];
+            this.strokeWidth = preset.width;
+
+            // Update slider UI
+            const slider = document.getElementById('wb-size-slider');
+            if (slider) slider.value = this.strokeWidth;
+
+            // Update indicator size
+            this.setStrokeWidth(this.strokeWidth);
+        }
+
         // Cursor logic
-        if (tool === WB_TOOLS.ERASER) this.canvas.style.cursor = 'crosshair'; // Should ideally contain an eraser circle
+        if (tool === WB_TOOLS.ERASER) this.canvas.style.cursor = 'crosshair';
         else if (tool === WB_TOOLS.TEXT) this.canvas.style.cursor = 'text';
+        else if (tool === WB_TOOLS.LASSO) this.canvas.style.cursor = 'default';
+        else if (tool === WB_TOOLS.PAN) this.canvas.style.cursor = 'grab';
         else this.canvas.style.cursor = 'crosshair';
     }
 
@@ -242,7 +286,45 @@ class Whiteboard {
         // For now, simple canvas scale is enough
     }
 
+    changePage(direction) {
+        const newIndex = this.pageIndex + direction;
+        if (newIndex >= 0 && newIndex < this.pages.length) {
+            this.pageIndex = newIndex;
+            document.getElementById('wb-page-num').textContent = `${this.pageIndex + 1} / ${this.pages.length}`;
+
+            // Clear sticky notes container and re-render stickies for this page
+            const container = document.getElementById('wb-sticky-container');
+            container.innerHTML = '';
+            this.pages[this.pageIndex].stickies.forEach(s => this.renderSticky(s));
+
+            // Redraw canvas
+            this.redrawAll();
+        }
+    }
+
+    addPage() {
+        this.pages.push({
+            id: this.generateId(),
+            strokes: [],
+            stickies: []
+        });
+        this.pageIndex = this.pages.length - 1;
+        document.getElementById('wb-page-num').textContent = `${this.pageIndex + 1} / ${this.pages.length}`;
+
+        // Clear and redraw
+        const container = document.getElementById('wb-sticky-container');
+        container.innerHTML = '';
+        this.redrawAll();
+    }
+
     resizeCanvas() {
+        if (this.pdfDocument) {
+            // In PDF mode, we don't resize the canvas dimensions (fixed to PDF size)
+            // But we might want to re-calculate zoom to fit if we wanted responsive auto-fit
+            // For now, let's just keep dimensions and let user scroll/zoom
+            return;
+        }
+
         const rect = this.container.getBoundingClientRect();
         // wrapper dims
         const wrapper = document.getElementById('wb-canvas-wrapper');
@@ -277,7 +359,39 @@ class Whiteboard {
         const page = this.pages[pageIndex];
 
         ctx.clearRect(0, 0, w, h);
-        this.drawBackground(ctx, w, h);
+
+        // Draw PDF background if present
+        if (page.pdfBackground) {
+            // Create image if not cached
+            if (!page._pdfBackgroundImage) {
+                page._pdfBackgroundImage = new Image();
+                page._pdfBackgroundImage.src = page.pdfBackground;
+            }
+
+            const img = page._pdfBackgroundImage;
+
+            // Draw if loaded, or wait for it to load
+            if (img.complete) {
+                ctx.drawImage(img, 0, 0);
+            } else {
+                // Image not loaded yet, set up onload handler
+                img.onload = () => {
+                    ctx.clearRect(0, 0, w, h);
+                    ctx.drawImage(img, 0, 0);
+                    // Redraw strokes on top
+                    page.strokes.forEach(s => {
+                        this.drawStroke(ctx, s);
+                    });
+                    if (exportMode && page.stickies) {
+                        this.drawStickiesForExport(ctx, page);
+                    }
+                };
+                // Return early, will redraw when image loads
+                return;
+            }
+        } else {
+            this.drawBackground(ctx, w, h);
+        }
 
         page.strokes.forEach(s => {
             this.drawStroke(ctx, s);
@@ -404,19 +518,45 @@ class Whiteboard {
         btn.disabled = true;
 
         try {
-            const pdfBlob = await this.generatePDF();
+            // Check if this is an annotated PDF
+            if (this.pdfDocument) {
+                // Save annotated PDF
+                const pdfBlob = await this.generatePDF();
+                const file = new File([pdfBlob], this.pdfFileName, { type: 'application/pdf' });
 
-            // File object
-            const file = new File([pdfBlob], name.endsWith('.pdf') ? name : name + '.pdf', { type: 'application/pdf' });
+                if (window.drive) {
+                    btn.innerText = "Uploading...";
+                    // Delete old version
+                    await window.drive.deleteFile(this.pdfFileId, this.pdfFileName);
+                    // Upload new annotated version
+                    await window.drive.uploadPDF(file, this.pdfSubject);
+                    this.closeUploadModal();
 
-            if (window.drive) {
-                btn.innerText = "Uploading...";
-                await window.drive.uploadPDF(file, subject);
-                this.closeUploadModal();
-                // Optionally clear
+                    if (window.ui && window.ui.showToast) {
+                        window.ui.showToast('Annotations saved!', 'success');
+                    }
+
+                    // Reload notes
+                    if (window.ui && window.ui.loadAllNotes) {
+                        await window.ui.loadAllNotes();
+                    }
+                } else {
+                    console.error("Drive module not found");
+                    alert("Drive module not found");
+                }
             } else {
-                console.error("Drive module not found");
-                alert("Drive module not found");
+                // Regular whiteboard save
+                const pdfBlob = await this.generatePDF();
+                const file = new File([pdfBlob], name.endsWith('.pdf') ? name : name + '.pdf', { type: 'application/pdf' });
+
+                if (window.drive) {
+                    btn.innerText = "Uploading...";
+                    await window.drive.uploadPDF(file, subject);
+                    this.closeUploadModal();
+                } else {
+                    console.error("Drive module not found");
+                    alert("Drive module not found");
+                }
             }
         } catch (e) {
             console.error(e);
@@ -498,7 +638,7 @@ class Whiteboard {
             ctx.lineWidth = s.width ?? preset.width;
             ctx.lineCap = preset.cap;
             ctx.lineJoin = preset.join;
-            if (s.type === "highlighter") ctx.globalCompositeOperation = "multiply";
+
 
             ctx.beginPath();
             if (s.points.length > 0) {
@@ -598,6 +738,64 @@ class Whiteboard {
             return;
         }
 
+        if (this.tool === WB_TOOLS.PAN) {
+            this.isPanning = true;
+            this.panStart = { x: e.clientX, y: e.clientY };
+            this.canvas.style.cursor = 'grabbing';
+            return;
+        }
+
+        if (this.tool === WB_TOOLS.LASSO) {
+            // Check if clicking on existing selection
+            if (this.selectedStrokes.length > 0 && this.isPointInSelection(pos)) {
+                this.isDraggingSelection = true;
+                this.selectionOffset = pos;
+            } else {
+                // Start new lasso selection
+                this.lassoPath = [pos];
+                this.isDrawing = true;
+                this.selectedStrokes = []; // Clear previous selection
+                this.octx.clearRect(0, 0, this.overlay.width, this.overlay.height);
+            }
+            return;
+        }
+
+        // Check if clicking on selected shape's resize handle
+        if (this.selectedShape) {
+            const bounds = this.getShapeBounds(this.selectedShape);
+            const handle = this.getResizeHandle(pos, bounds);
+            if (handle) {
+                this.isResizingShape = true;
+                this.resizeHandle = handle;
+                this.dragStartPos = pos;
+                this.shapeOriginalBounds = { ...bounds };
+                return;
+            }
+        }
+
+        // Check if clicking on a shape
+        const clickedShape = this.getShapeAt(pos);
+        if (clickedShape) {
+            // If clicking on already selected shape, start dragging
+            if (this.selectedShape === clickedShape) {
+                this.isDraggingShape = true;
+                this.dragStartPos = pos;
+                return;
+            } else {
+                // Select new shape
+                this.selectedShape = clickedShape;
+                this.octx.clearRect(0, 0, this.overlay.width, this.overlay.height);
+                this.drawSelectionBox(this.selectedShape);
+                return;
+            }
+        } else {
+            // Clicked on empty space - deselect
+            if (this.selectedShape) {
+                this.selectedShape = null;
+                this.octx.clearRect(0, 0, this.overlay.width, this.overlay.height);
+            }
+        }
+
         if (this.tool === WB_TOOLS.ERASER) {
             this.isDrawing = true;
             this.eraseAt(pos);
@@ -624,13 +822,138 @@ class Whiteboard {
     }
 
     handlePointerMove(e) {
-        // e.preventDefault(); // can break scrolling if not careful
-        if (!this.isDrawing) {
-            // Laser pointer logic could go here
+        // Handle panning
+        if (this.isPanning) {
+            const dx = e.clientX - this.panStart.x;
+            const dy = e.clientY - this.panStart.y;
+            const container = document.querySelector('.wb-main-area');
+            container.scrollLeft -= dx;
+            container.scrollTop -= dy;
+            this.panStart = { x: e.clientX, y: e.clientY };
             return;
         }
 
+        // Handle lasso selection dragging
+        if (this.isDraggingSelection) {
+            const pos = this.getPos(e);
+            const dx = pos.x - this.selectionOffset.x;
+            const dy = pos.y - this.selectionOffset.y;
+            this.moveSelectedStrokes(dx, dy);
+            this.selectionOffset = pos;
+            this.redrawAll();
+            return;
+        }
+
+        // e.preventDefault(); // can break scrolling if not careful
         const pos = this.getPos(e);
+
+        // Handle shape dragging
+        if (this.isDraggingShape && this.selectedShape) {
+            const dx = pos.x - this.dragStartPos.x;
+            const dy = pos.y - this.dragStartPos.y;
+
+            if (this.selectedShape.type === 'rect') {
+                this.selectedShape.x += dx;
+                this.selectedShape.y += dy;
+            } else if (this.selectedShape.type === 'circle') {
+                this.selectedShape.cx += dx;
+                this.selectedShape.cy += dy;
+            } else if (this.selectedShape.type === 'line' || this.selectedShape.type === 'arrow') {
+                this.selectedShape.x1 += dx;
+                this.selectedShape.y1 += dy;
+                this.selectedShape.x2 += dx;
+                this.selectedShape.y2 += dy;
+            }
+
+            this.dragStartPos = pos;
+            this.redrawAll();
+            this.drawSelectionBox(this.selectedShape);
+            return;
+        }
+
+        // Handle shape resizing
+        if (this.isResizingShape && this.selectedShape) {
+            const dx = pos.x - this.dragStartPos.x;
+            const dy = pos.y - this.dragStartPos.y;
+            const origBounds = this.shapeOriginalBounds;
+            const minSize = 10; // Minimum width/height
+
+            if (this.selectedShape.type === 'rect') {
+                let newX = origBounds.x;
+                let newY = origBounds.y;
+                let newW = origBounds.w;
+                let newH = origBounds.h;
+
+                if (this.resizeHandle.includes('w')) { newX += dx; newW -= dx; }
+                if (this.resizeHandle.includes('e')) { newW += dx; }
+                if (this.resizeHandle.includes('n')) { newY += dy; newH -= dy; }
+                if (this.resizeHandle.includes('s')) { newH += dy; }
+
+                // Apply minimum size
+                if (Math.abs(newW) < minSize) newW = minSize * Math.sign(newW || 1);
+                if (Math.abs(newH) < minSize) newH = minSize * Math.sign(newH || 1);
+
+                this.selectedShape.x = newX;
+                this.selectedShape.y = newY;
+                this.selectedShape.w = newW;
+                this.selectedShape.h = newH;
+            } else if (this.selectedShape.type === 'circle') {
+                let newRx = origBounds.w / 2;
+                let newRy = origBounds.h / 2;
+
+                if (this.resizeHandle.includes('e') || this.resizeHandle.includes('w')) {
+                    newRx += (this.resizeHandle.includes('e') ? dx : -dx) / 2;
+                }
+                if (this.resizeHandle.includes('s') || this.resizeHandle.includes('n')) {
+                    newRy += (this.resizeHandle.includes('s') ? dy : -dy) / 2;
+                }
+
+                this.selectedShape.rx = Math.max(minSize / 2, Math.abs(newRx));
+                this.selectedShape.ry = Math.max(minSize / 2, Math.abs(newRy));
+            } else if (this.selectedShape.type === 'line' || this.selectedShape.type === 'arrow') {
+                // For lines/arrows, resize by moving endpoints
+                const origShape = this.selectedShape;
+
+                if (this.resizeHandle === 'nw' || this.resizeHandle === 'n' || this.resizeHandle === 'w') {
+                    // Moving start point
+                    origShape.x1 = origBounds.x + (this.resizeHandle.includes('w') ? dx : 0);
+                    origShape.y1 = origBounds.y + (this.resizeHandle.includes('n') ? dy : 0);
+                } else if (this.resizeHandle === 'se' || this.resizeHandle === 's' || this.resizeHandle === 'e') {
+                    // Moving end point
+                    origShape.x2 = origBounds.x + origBounds.w + (this.resizeHandle.includes('e') ? dx : 0);
+                    origShape.y2 = origBounds.y + origBounds.h + (this.resizeHandle.includes('s') ? dy : 0);
+                }
+            }
+
+            this.redrawAll();
+            this.drawSelectionBox(this.selectedShape);
+            return;
+        }
+
+        // Eraser Cursor (Hover)
+        if (this.tool === WB_TOOLS.ERASER) {
+            const octx = this.octx;
+            const r = (this.strokeWidth || 20) / 2;
+            octx.clearRect(0, 0, this.overlay.width, this.overlay.height);
+            octx.beginPath();
+            octx.arc(pos.x, pos.y, r, 0, Math.PI * 2);
+            octx.strokeStyle = '#2a2a3e';
+            octx.lineWidth = 1;
+            octx.stroke();
+            octx.fillStyle = 'rgba(255, 255, 255, 0.2)';
+            octx.fill();
+        }
+
+        if (!this.isDrawing) {
+            return;
+        }
+
+        // Handle lasso path drawing
+        if (this.tool === WB_TOOLS.LASSO && this.lassoPath.length > 0) {
+            this.lassoPath.push(pos);
+            this.drawLassoPath();
+            return;
+        }
 
         if (this.tool === WB_TOOLS.ERASER) {
             this.eraseAt(pos);
@@ -652,7 +975,7 @@ class Whiteboard {
                 ctx.lineWidth = s.width;
                 ctx.lineCap = preset.cap;
                 ctx.lineJoin = preset.join;
-                if (s.type === "highlighter") ctx.globalCompositeOperation = "multiply";
+
 
                 const p0 = pts[pts.length - 2];
                 const p1 = pts[pts.length - 1];
@@ -697,6 +1020,32 @@ class Whiteboard {
     }
 
     handlePointerUp(e) {
+        // Handle pan release
+        if (this.isPanning) {
+            this.isPanning = false;
+            this.canvas.style.cursor = 'grab';
+            return;
+        }
+
+        // Handle lasso selection drag release
+        if (this.isDraggingSelection) {
+            this.isDraggingSelection = false;
+            return;
+        }
+
+        // Handle lasso selection completion
+        if (this.tool === WB_TOOLS.LASSO && this.lassoPath.length > 0) {
+            // Clear temporary drawing path
+            this.octx.clearRect(0, 0, this.overlay.width, this.overlay.height);
+
+            // Perform selection
+            this.completeSelection();
+
+            this.lassoPath = [];
+            this.isDrawing = false;
+            return;
+        }
+
         if (!this.isDrawing) return;
         this.isDrawing = false;
 
@@ -720,41 +1069,312 @@ class Whiteboard {
                 shape = { type: "arrow", color: this.color, width: this.strokeWidth, x1: this.shapeStart.x, y1: this.shapeStart.y, x2: pos.x, y2: pos.y };
             }
 
-            if (shape) this.saveStroke(shape);
+            if (shape) {
+                this.saveStroke(shape);
+                // Auto-select the newly created shape
+                this.selectedShape = shape;
+                this.drawSelectionBox(this.selectedShape);
+            }
             this.shapeStart = null;
-            this.octx.clearRect(0, 0, this.overlay.width, this.overlay.height);
+        }
+
+        // Reset dragging/resizing states
+        if (this.isDraggingShape || this.isResizingShape) {
+            this.isDraggingShape = false;
+            this.isResizingShape = false;
+            this.resizeHandle = null;
+            this.dragStartPos = null;
+            this.shapeOriginalBounds = null;
         }
 
         this.redrawAll();
+
+        // Redraw selection box if shape is selected
+        if (this.selectedShape) {
+            this.drawSelectionBox(this.selectedShape);
+        }
     }
 
     eraseAt(pos) {
-        const threshold = 15;
+        const radius = (this.strokeWidth || 20) / 2;
         const page = this.pages[this.pageIndex];
-        const initialCount = page.strokes.length;
+        let modified = false;
+        const newStrokes = [];
 
-        page.strokes = page.strokes.filter(s => {
+        for (const s of page.strokes) {
             if (s.points) {
-                // Freehand
-                return !s.points.some(p => Math.hypot(p.x - pos.x, p.y - pos.y) < threshold);
-            }
-            // Simple bounding box checks for shapes for performance, can enhance later
-            if (s.type === 'rect') {
-                return !(pos.x > s.x - threshold && pos.x < s.x + s.w + threshold && pos.y > s.y - threshold && pos.y < s.y + s.h + threshold);
-            }
-            return true; // Keep others for now to avoid accidental deletions of complex shapes
-        });
+                // Freehand: Smooth Vector Erasure
+                const result = this.computeErasure(s, pos, radius);
+                if (result.length !== 1 || result[0] !== s) {
+                    modified = true;
+                    newStrokes.push(...result);
+                } else {
+                    newStrokes.push(s);
+                }
+            } else {
+                // Shapes: Simple bounding box (Object Eraser)
+                let visible = true;
+                if (s.type === 'rect' || s.type === 'image') {
+                    if (pos.x > s.x - radius && pos.x < s.x + s.w + radius &&
+                        pos.y > s.y - radius && pos.y < s.y + s.h + radius) visible = false;
+                } else if (s.type === 'circle') {
+                    if (Math.hypot(s.cx - pos.x, s.cy - pos.y) < s.rx + radius) visible = false;
+                } else if (s.type === 'line' || s.type === 'arrow') {
+                    // Approximate AABB
+                    const minX = Math.min(s.x1, s.x2) - radius;
+                    const maxX = Math.max(s.x1, s.x2) + radius;
+                    const minY = Math.min(s.y1, s.y2) - radius;
+                    const maxY = Math.max(s.y1, s.y2) + radius;
+                    if (pos.x > minX && pos.x < maxX && pos.y > minY && pos.y < maxY) {
+                        // Refined distance check could go here
+                        visible = false;
+                    }
+                } else if (s.type === 'text') {
+                    const w = s.text.length * s.fontSize * 0.6;
+                    const h = s.fontSize;
+                    if (pos.x > s.x - radius && pos.x < s.x + w + radius &&
+                        pos.y > s.y - radius && pos.y < s.y + h + radius) visible = false;
+                }
 
-        if (page.strokes.length !== initialCount) {
+                if (visible) newStrokes.push(s);
+                else modified = true;
+            }
+        }
+
+        if (modified) {
+            page.strokes = newStrokes;
             this.redrawAll();
         }
     }
+
+    computeErasure(stroke, center, radius) {
+        // Optimization: Check bounding box of stroke first
+        // But for freehand stroke, computing BB might be slow? 
+        // Iterate segments
+        const segments = [];
+        let currentPoints = [];
+        let modified = false;
+
+        const points = stroke.points;
+        if (points.length === 0) return [];
+
+        let p1 = points[0];
+        let p1Inside = (Math.pow(p1.x - center.x, 2) + Math.pow(p1.y - center.y, 2)) < radius * radius;
+
+        if (!p1Inside) currentPoints.push(p1);
+        else modified = true;
+
+        for (let i = 1; i < points.length; i++) {
+            const p2 = points[i];
+            const p2Inside = (Math.pow(p2.x - center.x, 2) + Math.pow(p2.y - center.y, 2)) < radius * radius;
+
+            if (p1Inside && p2Inside) {
+                // Fully inside, skip
+                modified = true;
+            } else if (!p1Inside && !p2Inside) {
+                // Both outside, but might pass through
+                const intersects = this.getEraserIntersections(p1, p2, center, radius);
+                if (intersects.length === 2) {
+                    // Enters and Exits
+                    currentPoints.push(intersects[0]);
+                    segments.push(currentPoints); // End segment
+
+                    currentPoints = [intersects[1], p2]; // Start new segment
+                    modified = true;
+                } else {
+                    currentPoints.push(p2);
+                }
+            } else if (!p1Inside && p2Inside) {
+                // Entering
+                const intersects = this.getEraserIntersections(p1, p2, center, radius);
+                if (intersects.length > 0) currentPoints.push(intersects[0]);
+
+                segments.push(currentPoints);
+                currentPoints = [];
+                modified = true;
+            } else if (p1Inside && !p2Inside) {
+                // Exiting
+                const intersects = this.getEraserIntersections(p1, p2, center, radius);
+                if (intersects.length > 0) currentPoints = [intersects[intersects.length - 1], p2];
+                else currentPoints = [p2]; // Should not happen ideally
+                modified = true;
+            }
+
+            p1 = p2;
+            p1Inside = p2Inside;
+        }
+
+        if (currentPoints.length > 0) segments.push(currentPoints);
+
+        if (!modified) return [stroke];
+
+        // Reconstruct strokes
+        const newStrokes = [];
+        segments.forEach(pts => {
+            // Filter tiny segments
+            if (pts.length >= 2 || (stroke.points.length === 1 && pts.length === 1)) {
+                newStrokes.push({ ...stroke, points: pts });
+            }
+        });
+        return newStrokes;
+    }
+
+    getEraserIntersections(p1, p2, center, radius) {
+        // Find intersection of line segment p1-p2 and circle (center, radius)
+        const dx = p2.x - p1.x;
+        const dy = p2.y - p1.y;
+        const fx = p1.x - center.x;
+        const fy = p1.y - center.y;
+
+        const a = dx * dx + dy * dy;
+        const b = 2 * (fx * dx + fy * dy);
+        const c = (fx * fx + fy * fy) - radius * radius;
+
+        const discriminant = b * b - 4 * a * c;
+        if (discriminant < 0) return [];
+
+        const t1 = (-b - Math.sqrt(discriminant)) / (2 * a);
+        const t2 = (-b + Math.sqrt(discriminant)) / (2 * a);
+
+        const res = [];
+        if (t1 >= 0 && t1 <= 1) {
+            res.push({ x: p1.x + t1 * dx, y: p1.y + t1 * dy });
+        }
+        if (t2 >= 0 && t2 <= 1) {
+            res.push({ x: p1.x + t2 * dx, y: p1.y + t2 * dy });
+        }
+        return res;
+    }
+
+    /* ================= SHAPE SELECTION & MANIPULATION ================= */
+
+    getShapeAt(pos) {
+        // Find shape at position (reverse order for top-most)
+        // Only return actual shapes, not freehand strokes
+        const page = this.pages[this.pageIndex];
+        for (let i = page.strokes.length - 1; i >= 0; i--) {
+            const s = page.strokes[i];
+            // Only check actual shapes, not freehand/pen/marker/highlighter
+            if (['rect', 'circle', 'line', 'arrow'].includes(s.type)) {
+                if (this.isPointInShape(pos, s)) {
+                    return s;
+                }
+            }
+        }
+        return null;
+    }
+
+    isPointInShape(pos, shape) {
+        const tolerance = 10; // Slightly larger for easier clicking
+        if (shape.type === 'rect') {
+            // Handle negative width/height
+            const x = shape.w >= 0 ? shape.x : shape.x + shape.w;
+            const y = shape.h >= 0 ? shape.y : shape.y + shape.h;
+            const w = Math.abs(shape.w);
+            const h = Math.abs(shape.h);
+            return pos.x >= x - tolerance && pos.x <= x + w + tolerance &&
+                pos.y >= y - tolerance && pos.y <= y + h + tolerance;
+        } else if (shape.type === 'circle') {
+            const dist = Math.hypot(pos.x - shape.cx, pos.y - shape.cy);
+            return dist <= Math.max(shape.rx, shape.ry) + tolerance;
+
+        } else if (shape.type === 'line' || shape.type === 'arrow') {
+            // Existing logic for lines is correct (it checks distance to segment)
+            const l2 = Math.pow(shape.x2 - shape.x1, 2) + Math.pow(shape.y2 - shape.y1, 2);
+            if (l2 === 0) return Math.hypot(pos.x - shape.x1, pos.y - shape.y1) <= tolerance;
+            let t = ((pos.x - shape.x1) * (shape.x2 - shape.x1) + (pos.y - shape.y1) * (shape.y2 - shape.y1)) / l2;
+            t = Math.max(0, Math.min(1, t));
+            const px = shape.x1 + t * (shape.x2 - shape.x1);
+            const py = shape.y1 + t * (shape.y2 - shape.y1);
+            return Math.hypot(pos.x - px, pos.y - py) <= tolerance;
+        }
+        return false;
+    }
+
+    getShapeBounds(shape) {
+        if (shape.type === 'rect') {
+            // Normalize negative dimensions
+            const x = shape.w >= 0 ? shape.x : shape.x + shape.w;
+            const y = shape.h >= 0 ? shape.y : shape.y + shape.h;
+            const w = Math.abs(shape.w);
+            const h = Math.abs(shape.h);
+            return { x, y, w, h };
+        } else if (shape.type === 'circle') {
+            return {
+                x: shape.cx - shape.rx,
+                y: shape.cy - shape.ry,
+                w: shape.rx * 2,
+                h: shape.ry * 2
+            };
+        } else if (shape.type === 'line' || shape.type === 'arrow') {
+            const minX = Math.min(shape.x1, shape.x2);
+            const minY = Math.min(shape.y1, shape.y2);
+            const maxX = Math.max(shape.x1, shape.x2);
+            const maxY = Math.max(shape.y1, shape.y2);
+            return { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+        }
+        return null;
+    }
+
+    getResizeHandle(pos, bounds) {
+        const handleSize = 8;
+        const handles = {
+            nw: { x: bounds.x, y: bounds.y },
+            ne: { x: bounds.x + bounds.w, y: bounds.y },
+            sw: { x: bounds.x, y: bounds.y + bounds.h },
+            se: { x: bounds.x + bounds.w, y: bounds.y + bounds.h },
+            n: { x: bounds.x + bounds.w / 2, y: bounds.y },
+            s: { x: bounds.x + bounds.w / 2, y: bounds.y + bounds.h },
+            e: { x: bounds.x + bounds.w, y: bounds.y + bounds.h / 2 },
+            w: { x: bounds.x, y: bounds.y + bounds.h / 2 }
+        };
+
+        for (const [name, handle] of Object.entries(handles)) {
+            if (Math.abs(pos.x - handle.x) <= handleSize && Math.abs(pos.y - handle.y) <= handleSize) {
+                return name;
+            }
+        }
+        return null;
+    }
+
+    drawSelectionBox(shape) {
+        const bounds = this.getShapeBounds(shape);
+        if (!bounds) return;
+
+        const octx = this.octx;
+        octx.save();
+        octx.strokeStyle = '#2196F3';
+        octx.lineWidth = 2;
+        octx.setLineDash([5, 5]);
+        octx.strokeRect(bounds.x, bounds.y, bounds.w, bounds.h);
+        octx.setLineDash([]);
+
+        // Draw resize handles
+        const handleSize = 6;
+        octx.fillStyle = '#2196F3';
+        const handles = [
+            { x: bounds.x, y: bounds.y },
+            { x: bounds.x + bounds.w, y: bounds.y },
+            { x: bounds.x, y: bounds.y + bounds.h },
+            { x: bounds.x + bounds.w, y: bounds.y + bounds.h },
+            { x: bounds.x + bounds.w / 2, y: bounds.y },
+            { x: bounds.x + bounds.w / 2, y: bounds.y + bounds.h },
+            { x: bounds.x + bounds.w, y: bounds.y + bounds.h / 2 },
+            { x: bounds.x, y: bounds.y + bounds.h / 2 }
+        ];
+
+        handles.forEach(h => {
+            octx.fillRect(h.x - handleSize / 2, h.y - handleSize / 2, handleSize, handleSize);
+        });
+
+        octx.restore();
+    }
+
 
     saveStroke(stroke) {
         this.pages[this.pageIndex].strokes.push(stroke);
         this.history.push({ pageIndex: this.pageIndex, stroke: stroke });
         this.redoStack = [];
-        this.redrawAll();
     }
 
     undo() {
@@ -779,6 +1399,22 @@ class Whiteboard {
             this.pages[this.pageIndex].strokes = [];
             this.pages[this.pageIndex].stickies = [];
             this.stickyNotes = [];
+
+            // Remove PDF background if present
+            if (this.pages[this.pageIndex].pdfBackground) {
+                delete this.pages[this.pageIndex].pdfBackground;
+            }
+
+            // Reset PDF state if this was the last PDF page
+            const hasPDFPages = this.pages.some(p => p.pdfBackground);
+            if (!hasPDFPages) {
+                this.pdfDocument = null;
+                this.pdfFileId = null;
+                this.pdfFileName = null;
+                this.pdfSubject = null;
+                this.pdfPages = [];
+            }
+
             document.getElementById('wb-sticky-container').innerHTML = ''; // Clear stickies DOM
             this.redrawAll();
         }
@@ -872,6 +1508,443 @@ class Whiteboard {
             this.redrawAll();
         }
     }
+
+    /* ================= PDF ANNOTATION ================= */
+
+    async loadPDFForAnnotation(fileId, fileName, subject) {
+        try {
+            if (window.ui && window.ui.showToast) {
+                window.ui.showToast('Loading PDF...', 'info');
+            }
+
+            // Download PDF from Google Drive
+            const blob = await this.downloadPDFBlob(fileId);
+            if (!blob) {
+                throw new Error('Failed to download PDF');
+            }
+
+            // Load PDF with PDF.js
+            const arrayBuffer = await blob.arrayBuffer();
+            const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+            this.pdfDocument = await loadingTask.promise;
+
+            this.pdfFileId = fileId;
+            this.pdfFileName = fileName;
+            this.pdfSubject = subject;
+
+            // Convert PDF pages to images
+            await this.renderPDFPages();
+
+            // Show whiteboard
+            this.show();
+
+            if (window.ui && window.ui.showToast) {
+                window.ui.showToast(`Loaded ${this.pdfDocument.numPages} pages`, 'success');
+            }
+        } catch (error) {
+            console.error('Error loading PDF:', error);
+            if (window.ui && window.ui.showToast) {
+                window.ui.showToast('Failed to load PDF', 'error');
+            } else {
+                alert('Failed to load PDF: ' + error.message);
+            }
+        }
+    }
+
+    async downloadPDFBlob(fileId) {
+        try {
+            const response = await gapi.client.drive.files.get({
+                fileId: fileId,
+                alt: 'media'
+            }, {
+                responseType: 'blob'
+            });
+
+            // The response.body contains the blob
+            return response.body;
+        } catch (error) {
+            console.error('Error downloading PDF:', error);
+            return null;
+        }
+    }
+
+    async renderPDFPages() {
+        this.pdfPages = [];
+        const numPages = this.pdfDocument.numPages;
+
+        for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+            const page = await this.pdfDocument.getPage(pageNum);
+            const viewport = page.getViewport({ scale: 2.0 });
+
+            // Create canvas for this page
+            const canvas = document.createElement('canvas');
+            const context = canvas.getContext('2d');
+            canvas.width = viewport.width;
+            canvas.height = viewport.height;
+
+            await page.render({
+                canvasContext: context,
+                viewport: viewport
+            }).promise;
+
+            // Convert to image data URL
+            const imageDataUrl = canvas.toDataURL('image/png');
+            this.pdfPages.push(imageDataUrl);
+        }
+
+        // Replace pages with PDF pages
+        this.pages = this.pdfPages.map((imgData, index) => ({
+            id: this.generateId(),
+            strokes: [],
+            stickies: [],
+            pdfBackground: imgData
+        }));
+
+        this.pageIndex = 0;
+        document.getElementById('wb-page-num').textContent = `1 / ${this.pages.length}`;
+        this.redrawAll();
+    }
+
+    /* ================= AREA SELECTION HELPERS ================= */
+
+    drawLassoPath() {
+        const octx = this.octx;
+        octx.clearRect(0, 0, this.overlay.width, this.overlay.height);
+
+        if (this.lassoPath.length === 0) return;
+
+        const start = this.lassoPath[0];
+        const current = this.lassoPath[this.lassoPath.length - 1]; // Use last point (current mouse pos)
+
+        octx.save();
+        octx.strokeStyle = '#8b5cf6';
+        octx.lineWidth = 1;
+        octx.setLineDash([5, 5]);
+        octx.fillStyle = 'rgba(139, 92, 246, 0.1)';
+
+        const w = current.x - start.x;
+        const h = current.y - start.y;
+
+        octx.fillRect(start.x, start.y, w, h);
+        octx.strokeRect(start.x, start.y, w, h);
+        octx.restore();
+    }
+
+    completeSelection() {
+        if (this.lassoPath.length < 2) return;
+
+        const page = this.pages[this.pageIndex];
+        this.selectedStrokes = [];
+
+        const start = this.lassoPath[0];
+        const end = this.lassoPath[this.lassoPath.length - 1];
+
+        // Normalize bounds
+        const minX = Math.min(start.x, end.x);
+        const maxX = Math.max(start.x, end.x);
+        const minY = Math.min(start.y, end.y);
+        const maxY = Math.max(start.y, end.y);
+
+        const selectionRect = { x: minX, y: minY, w: maxX - minX, h: maxY - minY };
+
+        // Check which strokes are inside or intersecting the selection rect
+        page.strokes.forEach((stroke, index) => {
+            if (this.isStrokeInRect(stroke, selectionRect)) {
+                this.selectedStrokes.push(index);
+            }
+        });
+
+        if (this.selectedStrokes.length > 0) {
+            this.drawSelectionBox();
+        }
+    }
+
+    isStrokeInRect(stroke, rect) {
+        // Simple bounding box check
+        let sMinX = Infinity, sMinY = Infinity, sMaxX = -Infinity, sMaxY = -Infinity;
+
+        if (stroke.points) {
+            stroke.points.forEach(p => {
+                sMinX = Math.min(sMinX, p.x);
+                sMinY = Math.min(sMinY, p.y);
+                sMaxX = Math.max(sMaxX, p.x);
+                sMaxY = Math.max(sMaxY, p.y);
+            });
+        } else if (stroke.type === 'rect' || stroke.type === 'image') {
+            sMinX = stroke.x;
+            sMinY = stroke.y;
+            sMaxX = stroke.x + stroke.w;
+            sMaxY = stroke.y + stroke.h;
+        } else if (stroke.type === 'circle') {
+            sMinX = stroke.cx - stroke.rx;
+            sMinY = stroke.cy - stroke.ry;
+            sMaxX = stroke.cx + stroke.rx;
+            sMaxY = stroke.cy + stroke.ry;
+        } else if (stroke.type === 'text') {
+            sMinX = stroke.x;
+            sMinY = stroke.y; // Text anchor is usually top-left or baseline
+            // Approximate text size
+            sMaxX = stroke.x + (stroke.text.length * stroke.fontSize * 0.6);
+            sMaxY = stroke.y + stroke.fontSize;
+        } else {
+            // Default fallback
+            return false;
+        }
+
+        // Rect intersection
+        return !(rect.x > sMaxX ||
+            rect.x + rect.w < sMinX ||
+            rect.y > sMaxY ||
+            rect.y + rect.h < sMinY);
+    }
+
+    isPointInSelection(point) {
+        if (this.selectedStrokes.length === 0) return false;
+
+        const page = this.pages[this.pageIndex];
+        const bounds = this.getSelectionBounds();
+
+        return point.x >= bounds.minX && point.x <= bounds.maxX &&
+            point.y >= bounds.minY && point.y <= bounds.maxY;
+    }
+
+    getSelectionBounds() {
+        const page = this.pages[this.pageIndex];
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+
+        this.selectedStrokes.forEach(index => {
+            const stroke = page.strokes[index];
+            if (stroke.points) {
+                stroke.points.forEach(p => {
+                    minX = Math.min(minX, p.x);
+                    minY = Math.min(minY, p.y);
+                    maxX = Math.max(maxX, p.x);
+                    maxY = Math.max(maxY, p.y);
+                });
+            }
+        });
+
+        return { minX, minY, maxX, maxY };
+    }
+
+    drawSelectionBox() {
+        const bounds = this.getSelectionBounds();
+        const octx = this.octx;
+
+        octx.clearRect(0, 0, this.overlay.width, this.overlay.height);
+        octx.save();
+        octx.strokeStyle = '#8b5cf6';
+        octx.lineWidth = 2;
+        octx.setLineDash([5, 5]);
+        octx.strokeRect(bounds.minX - 5, bounds.minY - 5,
+            bounds.maxX - bounds.minX + 10,
+            bounds.maxY - bounds.minY + 10);
+        octx.restore();
+    }
+
+    moveSelectedStrokes(dx, dy) {
+        const page = this.pages[this.pageIndex];
+
+        this.selectedStrokes.forEach(index => {
+            const stroke = page.strokes[index];
+            if (stroke.points) {
+                stroke.points.forEach(p => {
+                    p.x += dx;
+                    p.y += dy;
+                });
+            } else if (stroke.x !== undefined) {
+                stroke.x += dx;
+                stroke.y += dy;
+                if (stroke.x1 !== undefined) {
+                    stroke.x1 += dx;
+                    stroke.y1 += dy;
+                    stroke.x2 += dx;
+                    stroke.y2 += dy;
+                }
+                if (stroke.cx !== undefined) {
+                    stroke.cx += dx;
+                    stroke.cy += dy;
+                }
+            }
+        });
+    }
+
+    /* ================= PDF ANNOTATION ================= */
+
+    async saveAnnotatedPDF() {
+        if (!this.pdfDocument) {
+            if (window.ui && window.ui.showToast) {
+                window.ui.showToast('No PDF loaded', 'warning');
+            }
+            return;
+        }
+
+        try {
+            const pdfBlob = await this.generatePDF();
+            const file = new File([pdfBlob], this.pdfFileName, { type: 'application/pdf' });
+
+            if (window.drive) {
+                // Delete old version
+                await window.drive.deleteFile(this.pdfFileId, this.pdfFileName);
+
+                // Upload new annotated version
+                await window.drive.uploadPDF(file, this.pdfSubject);
+
+                if (window.ui && window.ui.showToast) {
+                    window.ui.showToast('Annotations saved!', 'success');
+                }
+
+                // Reload notes
+                if (window.ui && window.ui.loadAllNotes) {
+                    await window.ui.loadAllNotes();
+                }
+            }
+        } catch (error) {
+            console.error('Error saving annotated PDF:', error);
+            if (window.ui && window.ui.showToast) {
+                window.ui.showToast('Failed to save annotations', 'error');
+            }
+        }
+    }
+
+    /* ================= PDF ANNOTATION ================= */
+
+    async loadPDFForAnnotation(fileId, fileName, subject) {
+        try {
+            if (window.ui && window.ui.showToast) {
+                window.ui.showToast('Loading PDF...', 'info');
+            }
+
+            // Download PDF from Google Drive using fetch
+            const blob = await this.downloadPDFBlob(fileId);
+            if (!blob) {
+                throw new Error('Failed to download PDF');
+            }
+
+            // Load PDF with PDF.js
+            const arrayBuffer = await blob.arrayBuffer();
+
+            // Set PDF.js worker
+            if (typeof pdfjsLib !== 'undefined') {
+                pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+            }
+
+            const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
+            this.pdfDocument = await loadingTask.promise;
+
+            this.pdfFileId = fileId;
+            this.pdfFileName = fileName;
+            this.pdfSubject = subject;
+
+            // Convert PDF pages to images
+            await this.renderPDFPages();
+
+            // Show whiteboard
+            this.show();
+
+            if (window.ui && window.ui.showToast) {
+                window.ui.showToast(`Loaded ${this.pdfDocument.numPages} pages`, 'success');
+            }
+        } catch (error) {
+            console.error('Error loading PDF:', error);
+            if (window.ui && window.ui.showToast) {
+                window.ui.showToast('Failed to load PDF: ' + error.message, 'error');
+            } else {
+                alert('Failed to load PDF: ' + error.message);
+            }
+        }
+    }
+
+    async downloadPDFBlob(fileId) {
+        try {
+            // Use fetch API with access token
+            const accessToken = gapi.auth.getToken().access_token;
+            const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+                headers: {
+                    'Authorization': `Bearer ${accessToken}`
+                }
+            });
+
+            if (!response.ok) {
+                throw new Error('Failed to fetch PDF from Drive');
+            }
+
+            const blob = await response.blob();
+            return blob;
+        } catch (error) {
+            console.error('Error downloading PDF:', error);
+            return null;
+        }
+    }
+
+    async renderPDFPages() {
+        this.pdfPages = [];
+        const numPages = this.pdfDocument.numPages;
+
+        // Get first page to determine dimensions
+        const firstPage = await this.pdfDocument.getPage(1);
+        const viewport = firstPage.getViewport({ scale: 1.5 }); // Use 1.5 scale for better quality
+
+        // Resize canvas to match PDF dimensions
+        this.canvas.width = viewport.width;
+        this.canvas.height = viewport.height;
+        this.overlay.width = viewport.width;
+        this.overlay.height = viewport.height;
+
+        // Calculate fit zoom
+        const containerWidth = this.container.clientWidth || window.innerWidth;
+        const containerHeight = this.container.clientHeight || window.innerHeight;
+
+        // Subtract some padding for toolbar
+        const availWidth = containerWidth - 80;
+        const availHeight = containerHeight - 80;
+
+        const scaleX = availWidth / viewport.width;
+        const scaleY = availHeight / viewport.height;
+        const fitScale = Math.min(scaleX, scaleY);
+
+        // Set zoom to fit
+        const zoomPercent = Math.floor(fitScale * 100);
+        // Ensure zoom is at least 10%
+        this.setZoom(Math.max(zoomPercent, 10));
+
+        // Center canvas origin for zoom if needed, but for now simple scale is enough
+        this.canvas.style.transformOrigin = 'top left';
+        this.overlay.style.transformOrigin = 'top left';
+
+        for (let pageNum = 1; pageNum <= numPages; pageNum++) {
+            const page = await this.pdfDocument.getPage(pageNum);
+            const pageViewport = page.getViewport({ scale: 1.5 });
+
+            // Create canvas for this page
+            const canvas = document.createElement('canvas');
+            const context = canvas.getContext('2d');
+            canvas.width = pageViewport.width;
+            canvas.height = pageViewport.height;
+
+            await page.render({
+                canvasContext: context,
+                viewport: pageViewport
+            }).promise;
+
+            // Convert to image data URL
+            const imageDataUrl = canvas.toDataURL('image/png');
+            this.pdfPages.push(imageDataUrl);
+        }
+
+        // Replace pages with PDF pages
+        this.pages = this.pdfPages.map((imgData, index) => ({
+            id: this.generateId(),
+            strokes: [],
+            stickies: [],
+            pdfBackground: imgData
+        }));
+
+        this.pageIndex = 0;
+        document.getElementById('wb-page-num').textContent = `1 / ${this.pages.length}`;
+        // Ensure overlay matches canvas size on redraw
+        this.redrawAll();
+    }
 }
 
 // Global instance
@@ -879,10 +1952,28 @@ let whiteboard;
 
 function initWhiteboard() {
     if (!whiteboard) {
-        whiteboard = new Whiteboard();
+        try {
+            whiteboard = new Whiteboard();
+            window.whiteboard = whiteboard;
+        } catch (e) {
+            console.error("Whiteboard init error:", e);
+            alert("Failed to initialize whiteboard.");
+            return;
+        }
     }
     whiteboard.show();
+    return whiteboard;
 }
 
-// Expose to window
+// Expose to window and bind button
 window.initWhiteboard = initWhiteboard;
+
+document.addEventListener('DOMContentLoaded', () => {
+    const btn = document.getElementById('whiteboard-btn');
+    if (btn) {
+        btn.addEventListener('click', (e) => {
+            e.preventDefault(); // Prevent default if any
+            initWhiteboard();
+        });
+    }
+});

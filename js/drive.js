@@ -263,13 +263,27 @@ async function getSubjectFolder(subjectName) {
  * Upload a PDF file to Google Drive
  */
 async function uploadPDF(file, subjectName) {
-    if (!window.auth.isAuthenticated()) {
+    console.log(`📤 Starting upload: ${file.name} to subject: ${subjectName}`);
+
+    // Check authentication
+    if (!window.auth || !window.auth.isAuthenticated()) {
+        console.error('❌ User not authenticated');
         showToast('Please sign in first', 'warning');
         return null;
     }
 
+    // Validate file type
     if (file.type !== 'application/pdf') {
+        console.error('❌ Invalid file type:', file.type);
         showToast('Only PDF files are allowed', 'error');
+        return null;
+    }
+
+    // Check file size (limit to 100MB)
+    const maxSize = 100 * 1024 * 1024; // 100MB
+    if (file.size > maxSize) {
+        console.error('❌ File too large:', file.size);
+        showToast('File size must be less than 100MB', 'error');
         return null;
     }
 
@@ -277,7 +291,12 @@ async function uploadPDF(file, subjectName) {
         showLoading(true);
 
         // Get subject folder ID
+        console.log(`📁 Getting folder for subject: ${subjectName}`);
         const folderId = await getSubjectFolder(subjectName);
+
+        if (!folderId) {
+            throw new Error('Failed to get or create subject folder');
+        }
 
         // File metadata
         const metadata = {
@@ -291,8 +310,14 @@ async function uploadPDF(file, subjectName) {
         form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
         form.append('file', file);
 
-        // Upload file using multipart upload
+        // Get access token
         const accessToken = window.auth.getAccessToken();
+        if (!accessToken) {
+            throw new Error('No access token available. Please sign in again.');
+        }
+
+        // Upload file using multipart upload
+        console.log(`⬆️ Uploading to Google Drive...`);
         const response = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,mimeType,createdTime,size,webViewLink,webContentLink', {
             method: 'POST',
             headers: new Headers({ 'Authorization': 'Bearer ' + accessToken }),
@@ -302,16 +327,36 @@ async function uploadPDF(file, subjectName) {
         const result = await response.json();
 
         if (response.ok) {
-            console.log('✅ File uploaded:', result);
+            console.log('✅ File uploaded successfully:', result);
             showToast(`${file.name} uploaded successfully!`, 'success');
+
+            // Track analytics
+            if (window.analytics && window.analytics.trackFileUpload) {
+                window.analytics.trackFileUpload(result.id, subjectName);
+            }
+
             return result;
         } else {
-            console.error('Server returned error:', result);
-            throw new Error(result.error ? result.error.message : 'Unknown upload error');
+            console.error('❌ Server returned error:', result);
+
+            // Handle specific error cases
+            let errorMessage = 'Upload failed';
+            if (result.error) {
+                if (result.error.code === 401) {
+                    errorMessage = 'Authentication expired. Please sign in again.';
+                } else if (result.error.code === 403) {
+                    errorMessage = 'Permission denied. Check your Google Drive permissions.';
+                } else if (result.error.code === 404) {
+                    errorMessage = 'Folder not found. Please try again.';
+                } else {
+                    errorMessage = result.error.message || errorMessage;
+                }
+            }
+
+            throw new Error(errorMessage);
         }
     } catch (error) {
         console.error('❌ Error uploading file:', error);
-        // Show the actual error message to the user
         showToast(`Upload failed: ${error.message}`, 'error');
         return null;
     } finally {
@@ -348,7 +393,18 @@ async function listPDFsBySubject(subjectName) {
  * List all PDF files from all subjects
  */
 async function listAllPDFs() {
-    if (!window.auth.isAuthenticated()) {
+    console.log('📋 Listing all PDF files...');
+
+    // Check authentication
+    if (!window.auth || !window.auth.isAuthenticated()) {
+        console.warn('⚠️ User not authenticated, returning empty list');
+        return [];
+    }
+
+    // Check if GAPI is loaded
+    if (typeof gapi === 'undefined' || !gapi.client || !gapi.client.drive) {
+        console.error('❌ Google Drive API not initialized');
+        showToast('Google Drive connection not ready. Please refresh the page.', 'warning');
         return [];
     }
 
@@ -357,17 +413,24 @@ async function listAllPDFs() {
 
         const allFiles = [];
 
+        console.log(`📁 Loading files from ${SUBJECTS.length} subjects...`);
         for (const subject of SUBJECTS) {
-            const files = await listPDFsBySubject(subject);
-            // Add subject info to each file
-            files.forEach(file => {
-                file.subject = subject;
-                file.isFavorite = FAVORITES.includes(file.id);
-            });
-            allFiles.push(...files);
+            try {
+                const files = await listPDFsBySubject(subject);
+                // Add subject info to each file
+                files.forEach(file => {
+                    file.subject = subject;
+                    file.isFavorite = FAVORITES.includes(file.id);
+                });
+                allFiles.push(...files);
+                console.log(`✅ Loaded ${files.length} files from ${subject}`);
+            } catch (error) {
+                console.error(`❌ Error loading files from ${subject}:`, error);
+                // Continue with other subjects even if one fails
+            }
         }
 
-        // Sort: Favorites first, then Data (Newest First)
+        // Sort: Favorites first, then Date (Newest First)
         allFiles.sort((a, b) => {
             if (a.isFavorite === b.isFavorite) {
                 return new Date(b.createdTime) - new Date(a.createdTime);
@@ -375,9 +438,11 @@ async function listAllPDFs() {
             return a.isFavorite ? -1 : 1;
         });
 
+        console.log(`✅ Total files loaded: ${allFiles.length}`);
         return allFiles;
     } catch (error) {
         console.error('❌ Error listing all files:', error);
+        showToast('Failed to load notes. Please try refreshing the page.', 'error');
         return [];
     } finally {
         showLoading(false);
@@ -562,19 +627,55 @@ async function listTrashedFiles() {
  */
 async function restoreFile(fileId, fileName) {
     try {
+        console.log(`🔄 Attempting to restore file: ${fileName} (ID: ${fileId})`);
+
+        // Check authentication
+        if (!window.auth || !window.auth.isAuthenticated()) {
+            console.error('❌ User not authenticated');
+            showToast('Please sign in to restore files', 'error');
+            return false;
+        }
+
+        // Check if GAPI is loaded
+        if (typeof gapi === 'undefined' || !gapi.client || !gapi.client.drive) {
+            console.error('❌ Google Drive API not initialized');
+            showToast('Google Drive connection not ready. Please refresh the page.', 'error');
+            return false;
+        }
+
         showLoading(true);
 
-        await gapi.client.drive.files.update({
+        // Restore the file by setting trashed to false
+        const response = await gapi.client.drive.files.update({
             fileId: fileId,
             resource: { trashed: false }
         });
 
-        console.log(`✅ File restored: ${fileName}`);
+        console.log(`✅ File restored successfully:`, response);
         showToast(`${fileName} restored successfully`, 'success');
+
+        // Track analytics
+        if (window.analytics && window.analytics.trackFileRestore) {
+            window.analytics.trackFileRestore(fileId);
+        }
+
         return true;
     } catch (error) {
         console.error('❌ Error restoring file:', error);
-        showToast('Failed to restore file', 'error');
+
+        // Provide more specific error messages
+        let errorMessage = 'Failed to restore file';
+        if (error.status === 401) {
+            errorMessage = 'Authentication expired. Please sign in again.';
+        } else if (error.status === 404) {
+            errorMessage = 'File not found. It may have been permanently deleted.';
+        } else if (error.status === 403) {
+            errorMessage = 'Permission denied. You may not have access to this file.';
+        } else if (error.result && error.result.error && error.result.error.message) {
+            errorMessage = error.result.error.message;
+        }
+
+        showToast(errorMessage, 'error');
         return false;
     } finally {
         showLoading(false);

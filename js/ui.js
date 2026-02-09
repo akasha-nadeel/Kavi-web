@@ -50,6 +50,9 @@ function initUI() {
         const uploadBtn = document.getElementById('upload-btn');
         if (uploadBtn) {
             uploadBtn.addEventListener('click', handleUploadClick);
+            console.log('✅ Upload button event listener attached');
+        } else {
+            console.error('❌ Upload button not found in DOM');
         }
 
         // Subject selector buttons - Initialize dynamic buttons
@@ -339,21 +342,27 @@ function filterAndDisplayNotes() {
  * Handle upload button click
  */
 function handleUploadClick() {
-    if (!window.auth.isAuthenticated()) {
+    console.log('📤 Upload button clicked');
+
+    if (!window.auth || !window.auth.isAuthenticated()) {
+        console.warn('⚠️ User not authenticated');
         showToast('Please sign in first', 'warning');
         return;
     }
 
+    console.log('✅ User authenticated, creating file input');
     const input = document.createElement('input');
     input.type = 'file';
     input.accept = 'application/pdf';
     input.multiple = true;
 
     input.onchange = (e) => {
+        console.log('📁 Files selected:', e.target.files.length);
         handleFileDrop(e.target.files);
     };
 
     input.click();
+    console.log('🖱️ File picker triggered');
 }
 
 /**
@@ -472,6 +481,26 @@ function displayNotes(notes) {
             window.drive.downloadFile(note.id, note.name);
         });
 
+        // Annotate button
+        const annotateBtn = card.querySelector('.annotate-btn');
+        if (annotateBtn) {
+            annotateBtn.addEventListener('click', async () => {
+                // Initialize whiteboard if not already done
+                if (!window.whiteboard) {
+                    window.initWhiteboard();
+                }
+
+                // Wait a moment for initialization
+                await new Promise(resolve => setTimeout(resolve, 100));
+
+                if (window.whiteboard && window.whiteboard.loadPDFForAnnotation) {
+                    await window.whiteboard.loadPDFForAnnotation(note.id, note.name, note.subject);
+                } else {
+                    showToast('Whiteboard not available', 'error');
+                }
+            });
+        }
+
         // Delete button
         card.querySelector('.delete-btn').addEventListener('click', async () => {
             const deleted = await window.drive.deleteFile(note.id, note.name);
@@ -552,6 +581,13 @@ function createPDFCard(note) {
                             <line x1="12" y1="15" x2="12" y2="3"></line>
                         </svg>
                         Download
+                    </button>
+                    <button class="action-btn annotate-btn" title="Annotate PDF" style="color: #8b5cf6;">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M12 19l7-7 3 3-7 7-3-3z"></path>
+                            <path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"></path>
+                        </svg>
+                        Annotate
                     </button>
                     <button class="action-btn delete-btn" title="Delete PDF">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
