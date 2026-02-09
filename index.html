@@ -33,6 +33,17 @@
                     <img src="icons/new-icon-192.png" alt="Logo" class="logo-img">
                     <span class="logo-text">Note Library</span>
                 </div>
+
+                <!-- User Selector -->
+                <div class="user-selector-container">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
+                        <circle cx="12" cy="7" r="4"></circle>
+                    </svg>
+                    <select id="user-selector" class="user-selector">
+                        <option value="Me">Me</option>
+                    </select>
+                </div>
             </div>
             <div class="header-actions">
                 <button id="theme-toggle" class="icon-btn" aria-label="Toggle theme">
@@ -220,6 +231,8 @@
         </div>
     </div>
 
+
+
     <!-- Trash Modal -->
     <div id="trash-modal" class="modal" style="display: none;">
         <div class="modal-content modal-large">
@@ -262,6 +275,7 @@
 
     <!-- App Scripts -->
     <script src="js/auth.js"></script>
+    <script src="js/users.js"></script>
     <script src="js/drive.js"></script>
     <script src="js/ui.js"></script>
 

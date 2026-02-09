@@ -161,32 +161,33 @@ async function getRootFolder() {
 }
 
 /**
- * Get or create a subject folder
+ * Get or create a user folder
  */
-async function getSubjectFolder(subjectName) {
+async function getUserFolder(userName) {
     try {
         // Check cache first
-        if (folderCache[subjectName]) {
-            return folderCache[subjectName];
+        const cacheKey = `user_${userName}`;
+        if (folderCache[cacheKey]) {
+            return folderCache[cacheKey];
         }
 
         const rootFolderId = await getRootFolder();
 
-        // Search for existing subject folder
+        // Search for existing user folder
         const response = await gapi.client.drive.files.list({
-            q: `name='${subjectName}' and '${rootFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+            q: `name='${userName}' and '${rootFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
             fields: 'files(id, name)',
             spaces: 'drive'
         });
 
         if (response.result.files && response.result.files.length > 0) {
-            // Subject folder exists
-            folderCache[subjectName] = response.result.files[0].id;
+            // User folder exists
+            folderCache[cacheKey] = response.result.files[0].id;
             return response.result.files[0].id;
         } else {
-            // Create subject folder
+            // Create user folder
             const fileMetadata = {
-                name: subjectName,
+                name: userName,
                 mimeType: 'application/vnd.google-apps.folder',
                 parents: [rootFolderId]
             };
@@ -196,8 +197,59 @@ async function getSubjectFolder(subjectName) {
                 fields: 'id'
             });
 
-            folderCache[subjectName] = folder.result.id;
-            console.log(`✅ Created subject folder: ${subjectName}`);
+            folderCache[cacheKey] = folder.result.id;
+            console.log(`✅ Created user folder: ${userName}`);
+            return folder.result.id;
+        }
+    } catch (error) {
+        console.error(`❌ Error getting/creating user folder ${userName}:`, error);
+        throw error;
+    }
+}
+
+/**
+ * Get or create a subject folder
+ */
+async function getSubjectFolder(subjectName) {
+    try {
+        // Get current user
+        const currentUser = window.users ? window.users.getCurrentUser() : 'Me';
+        const cacheKey = `${currentUser}_${subjectName}`;
+
+        // Check cache first
+        if (folderCache[cacheKey]) {
+            return folderCache[cacheKey];
+        }
+
+        // Get user folder ID (this will be the parent for subject folders)
+        const userFolderId = await getUserFolder(currentUser);
+
+        // Search for existing subject folder inside user folder
+        const response = await gapi.client.drive.files.list({
+            q: `name='${subjectName}' and '${userFolderId}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+            fields: 'files(id, name)',
+            spaces: 'drive'
+        });
+
+        if (response.result.files && response.result.files.length > 0) {
+            // Subject folder exists
+            folderCache[cacheKey] = response.result.files[0].id;
+            return response.result.files[0].id;
+        } else {
+            // Create subject folder inside user folder
+            const fileMetadata = {
+                name: subjectName,
+                mimeType: 'application/vnd.google-apps.folder',
+                parents: [userFolderId]
+            };
+
+            const folder = await gapi.client.drive.files.create({
+                resource: fileMetadata,
+                fields: 'id'
+            });
+
+            folderCache[cacheKey] = folder.result.id;
+            console.log(`✅ Created subject folder: ${currentUser}/${subjectName}`);
             return folder.result.id;
         }
     } catch (error) {

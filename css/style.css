@@ -223,6 +223,40 @@ body {
     color: var(--error);
 }
 
+/* User Selector */
+.user-selector-container {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-color);
+    border-radius: 50px;
+    margin-left: 1.5rem;
+}
+
+.user-selector-container svg {
+    color: var(--text-secondary);
+    flex-shrink: 0;
+}
+
+.user-selector {
+    background: transparent;
+    border: none;
+    color: var(--text-primary);
+    font-size: 0.95rem;
+    font-weight: 600;
+    cursor: pointer;
+    outline: none;
+    padding: 0;
+    min-width: 80px;
+}
+
+.user-selector option {
+    background: var(--bg-secondary);
+    color: var(--text-primary);
+}
+
 
 
 /* ==================== CONTAINER ==================== */

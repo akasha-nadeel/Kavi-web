@@ -105,6 +105,20 @@ function initUI() {
             });
         }
 
+
+        // User Selector Change
+        const userSelector = document.getElementById('user-selector');
+        if (userSelector) {
+            userSelector.addEventListener('change', (e) => {
+                const selectedUser = e.target.value;
+                window.users.setCurrentUser(selectedUser);
+                showToast(`Switched to ${selectedUser}`, 'success');
+            });
+
+            // Initialize user selector
+            window.users.updateUserSelectorUI();
+        }
+
         // Trash Modal Loop
         const trashBtn = document.getElementById('trash-btn');
         const trashModal = document.getElementById('trash-modal');
@@ -633,6 +647,7 @@ function renderSubjectsList() {
         </div>
     `).join('');
 }
+
 
 /**
  * Handle renaming a subject
