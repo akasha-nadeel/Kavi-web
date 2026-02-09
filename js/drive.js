@@ -25,7 +25,8 @@ const ROOT_FOLDER_ID = '11yKfTAeieeW0_wvC74_Sfy2ujZ-8aNpB'; // ID from your prov
 const ROOT_FOLDER_NAME = 'Campus Notes Library';
 
 // Subject folders
-let SUBJECTS = JSON.parse(localStorage.getItem('campus_notes_subjects')) || ['Programming', 'Mathematics', 'Database', 'Networks', 'Algorithms'];
+// Subjects - single user storage
+let SUBJECTS = JSON.parse(localStorage.getItem('campus_notes_subjects')) || [];
 
 // Favorites
 let FAVORITES = JSON.parse(localStorage.getItem('campus_notes_favorites')) || [];
@@ -480,6 +481,11 @@ async function previewFile(fileId, fileName) {
             const blob = await response.blob();
             const pdfBlob = new Blob([blob], { type: 'application/pdf' });
             const url = window.URL.createObjectURL(pdfBlob);
+
+            // Track note view in analytics
+            if (window.analytics && window.analytics.trackNoteView) {
+                window.analytics.trackNoteView(fileId, fileName);
+            }
 
             if (window.ui && window.ui.showPDFModal) {
                 window.ui.showPDFModal(url, fileName);

@@ -1,11 +1,15 @@
-const CACHE_NAME = 'campus-notes-v13';
+const CACHE_NAME = 'campus-notes-v29';
 const ASSETS_TO_CACHE = [
     './',
     './index.html',
     './css/style.css',
+    './css/stats.css',
     './js/auth.js',
     './js/users.js',
     './js/drive.js',
+    './js/analytics.js',
+    './js/stats-ui.js',
+    './js/scanner.js',
     './js/ui.js',
     './icons/new-icon-192.png',
     './icons/new-icon-512.png',

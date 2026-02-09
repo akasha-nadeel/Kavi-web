@@ -1,0 +1,459 @@
+/* ==================== WHITEBOARD STYLES ==================== */
+/* Main Container - Full Screen Overlay */
+#whiteboard-container {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100vw;
+    height: 100vh;
+    background-color: #f8f8fc;
+    z-index: 2000;
+    display: none;
+    /* Hidden by default */
+    flex-direction: column;
+    font-family: 'Inter', sans-serif;
+    color: #2a2a3e;
+    overflow: hidden;
+}
+
+#whiteboard-container[data-theme="dark"] {
+    background-color: #12121e;
+    color: #e0e0f0;
+}
+
+/* Top Bar */
+.wb-top-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 16px;
+    background-color: #fafaff;
+    border-bottom: 1px solid #e2e2ee;
+    flex-shrink: 0;
+    z-index: 20;
+    height: 50px;
+}
+
+#whiteboard-container[data-theme="dark"] .wb-top-bar {
+    background-color: #181828;
+    border-color: #2e2e48;
+}
+
+.wb-header-left {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.wb-back-btn {
+    width: 36px;
+    height: 36px;
+    border: none;
+    background: transparent;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: inherit;
+    transition: background 0.15s;
+}
+
+.wb-back-btn:hover {
+    background-color: #f0eef8;
+}
+
+#whiteboard-container[data-theme="dark"] .wb-back-btn:hover {
+    background-color: #282840;
+}
+
+.wb-title {
+    font-weight: 700;
+    font-size: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.wb-actions-right {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.wb-separator {
+    width: 1px;
+    height: 22px;
+    background-color: #e2e2ee;
+    margin: 0 6px;
+}
+
+#whiteboard-container[data-theme="dark"] .wb-separator {
+    background-color: #2e2e48;
+}
+
+/* Tool Buttons (Top & Left) */
+.wb-icon-btn {
+    width: 32px;
+    height: 32px;
+    border: none;
+    background: transparent;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: inherit;
+    transition: background 0.15s;
+}
+
+.wb-icon-btn:hover {
+    background-color: #f0eef8;
+}
+
+#whiteboard-container[data-theme="dark"] .wb-icon-btn:hover {
+    background-color: #282840;
+}
+
+/* Main Area Layout */
+.wb-main-area {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+    position: relative;
+}
+
+/* Left Toolbar */
+.wb-toolbar-left {
+    width: 60px;
+    background-color: #fafaff;
+    border-right: 1px solid #e2e2ee;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 12px 0;
+    gap: 8px;
+    overflow-y: auto;
+    flex-shrink: 0;
+    z-index: 10;
+}
+
+#whiteboard-container[data-theme="dark"] .wb-toolbar-left {
+    background-color: #181828;
+    border-color: #2e2e48;
+}
+
+.wb-tool-btn {
+    width: 42px;
+    height: 42px;
+    border: 2px solid transparent;
+    background: transparent;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: #888898;
+    transition: all 0.15s;
+}
+
+.wb-tool-btn.active {
+    background-color: #ede9fe;
+    border-color: #8b5cf6;
+    color: #8b5cf6;
+}
+
+#whiteboard-container[data-theme="dark"] .wb-tool-btn.active {
+    background-color: #3a2a5e;
+    border-color: #7c5cbf;
+    color: #7c5cbf;
+}
+
+.wb-toolbar-divider {
+    width: 32px;
+    height: 1px;
+    background-color: #e2e2ee;
+    margin: 4px 0;
+}
+
+#whiteboard-container[data-theme="dark"] .wb-toolbar-divider {
+    background-color: #2e2e48;
+}
+
+/* Canvas Area */
+#wb-canvas-wrapper {
+    flex: 1;
+    position: relative;
+    overflow: hidden;
+    background-color: inherit;
+    cursor: crosshair;
+    touch-action: none;
+}
+
+canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+    transform-origin: top left;
+}
+
+/* Bottom Bar */
+.wb-bottom-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 16px;
+    background-color: #fafaff;
+    border-top: 1px solid #e2e2ee;
+    flex-shrink: 0;
+    z-index: 20;
+    height: 50px;
+    gap: 12px;
+}
+
+#whiteboard-container[data-theme="dark"] .wb-bottom-bar {
+    background-color: #181828;
+    border-color: #2e2e48;
+}
+
+/* Color Picker */
+.wb-color-picker {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.wb-color-btn {
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    border: 1.5px solid #e2e2ee;
+    cursor: pointer;
+    transition: all 0.15s;
+}
+
+.wb-color-btn.active {
+    border: 2.5px solid #8b5cf6;
+    box-shadow: 0 0 0 2px #fff, 0 0 0 4px #8b5cf6;
+}
+
+#whiteboard-container[data-theme="dark"] .wb-color-btn {
+    border-color: #2e2e48;
+}
+
+/* Stroke Size */
+.wb-stroke-input {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* Popups */
+.wb-popup {
+    position: absolute;
+    top: 110%;
+    right: 0;
+    background-color: #ffffff;
+    border: 1px solid #e2e2ee;
+    border-radius: 10px;
+    padding: 6px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.18);
+    z-index: 100;
+    min-width: 120px;
+    display: none;
+}
+
+.wb-popup.show {
+    display: block;
+}
+
+#whiteboard-container[data-theme="dark"] .wb-popup {
+    background-color: #1e1e30;
+    border-color: #2e2e48;
+}
+
+.wb-popup-item {
+    display: block;
+    width: 100%;
+    padding: 8px 12px;
+    border: none;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    border-radius: 4px;
+    font-size: 13px;
+}
+
+.wb-popup-item:hover {
+    background-color: #f0eef8;
+}
+
+#whiteboard-container[data-theme="dark"] .wb-popup-item:hover {
+    background-color: #282840;
+}
+
+/* Sticky Notes */
+.wb-sticky-note {
+    position: absolute;
+    box-shadow: 0 3px 12px rgba(0, 0, 0, 0.15);
+    padding: 10px;
+    border-radius: 4px;
+    font-family: 'Inter', sans-serif;
+    font-size: 13px;
+    line-height: 1.4;
+    color: #1a1a2e;
+    cursor: grab;
+    display: flex;
+    flex-direction: column;
+}
+
+.wb-sticky-note:active {
+    cursor: grabbing;
+}
+
+.wb-sticky-header {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 5px;
+}
+
+.wb-sticky-textarea {
+    width: 100%;
+    height: 100%;
+    border: none;
+    background: transparent;
+    resize: none;
+    outline: none;
+    font-family: inherit;
+    flex: 1;
+}
+
+/* Utility to hide/show elements */
+.hidden {
+    display: none !important;
+}
+
+/* Upload Modal */
+.wb-modal-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    display: flex;
+    /* Changed to flex for centering, initially hidden by JS/style */
+    align-items: center;
+    justify-content: center;
+    z-index: 2100;
+}
+
+.wb-modal {
+    background-color: #ffffff;
+    padding: 24px;
+    border-radius: 12px;
+    width: 360px;
+    box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+}
+
+#whiteboard-container[data-theme="dark"] .wb-modal {
+    background-color: #1e1e30;
+    color: #e0e0f0;
+}
+
+.wb-modal h3 {
+    margin-top: 0;
+    margin-bottom: 20px;
+    font-size: 18px;
+    font-weight: 600;
+}
+
+.wb-form-group {
+    margin-bottom: 16px;
+}
+
+.wb-form-group label {
+    display: block;
+    margin-bottom: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    color: #666;
+}
+
+#whiteboard-container[data-theme="dark"] .wb-form-group label {
+    color: #aaa;
+}
+
+.wb-input-field,
+.wb-select-field {
+    width: 100%;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid #e2e2ee;
+    background-color: #f8f8fc;
+    color: inherit;
+    font-size: 14px;
+    outline: none;
+    transition: border-color 0.15s;
+}
+
+.wb-input-field:focus,
+.wb-select-field:focus {
+    border-color: #8b5cf6;
+}
+
+#whiteboard-container[data-theme="dark"] .wb-input-field,
+#whiteboard-container[data-theme="dark"] .wb-select-field {
+    background-color: #2a2a3e;
+    border-color: #3e3e5e;
+}
+
+#whiteboard-container[data-theme="dark"] .wb-input-field:focus,
+#whiteboard-container[data-theme="dark"] .wb-select-field:focus {
+    border-color: #8b5cf6;
+}
+
+.wb-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 12px;
+    margin-top: 24px;
+}
+
+.wb-btn {
+    padding: 8px 16px;
+    border-radius: 6px;
+    border: none;
+    font-weight: 500;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background 0.15s;
+}
+
+.wb-btn-secondary {
+    background-color: #e2e2ee;
+    color: #4b5563;
+}
+
+.wb-btn-secondary:hover {
+    background-color: #d1d5db;
+}
+
+.wb-btn-primary {
+    background-color: #8b5cf6;
+    color: white;
+}
+
+.wb-btn-primary:hover {
+    background-color: #7c3aed;
+}
+
+#whiteboard-container[data-theme="dark"] .wb-btn-secondary {
+    background-color: #2e2e48;
+    color: #e0e0f0;
+}
+
+#whiteboard-container[data-theme="dark"] .wb-btn-secondary:hover {
+    background-color: #3e3e5e;
+}
