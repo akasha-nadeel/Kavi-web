@@ -1,0 +1,28 @@
+{
+  "name": "Campus Notes Library",
+  "short_name": "Campus Notes",
+  "start_url": "index.html",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#6366f1",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "icons/new-icon-192.png",
+      "type": "image/png",
+      "sizes": "192x192"
+    },
+    {
+      "src": "icons/new-icon-512.png",
+      "type": "image/png",
+      "sizes": "512x512"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "Upload Note",
+      "url": "index.html?action=upload",
+      "description": "Upload a new PDF note"
+    }
+  ]
+}

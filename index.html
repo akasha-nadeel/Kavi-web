@@ -6,6 +6,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="description"
         content="My Campus Notes Library - Organize and manage your campus PDF notes with Google Drive integration">
+    <meta name="theme-color" content="#6366f1">
+    <link rel="manifest" href="manifest.json?v=10">
+    <link rel="icon" href="icons/new-icon-192.png">
+    <link rel="apple-touch-icon" href="icons/new-icon-apple.png">
     <title>My Campus Notes Library</title>
     <link rel="stylesheet" href="css/style.css">
     <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -18,7 +22,7 @@
     <header class="header">
         <div class="header-content">
             <div class="header-left">
-                <button id="menu-toggle" class="icon-btn menu-btn" aria-label="Toggle Menu">
+                <button id="menu-toggle" type="button" class="icon-btn menu-btn" aria-label="Toggle Menu">
                     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <line x1="3" y1="12" x2="21" y2="12"></line>
                         <line x1="3" y1="6" x2="21" y2="6"></line>
@@ -26,8 +30,8 @@
                     </svg>
                 </button>
                 <div class="logo">
-                    <span class="logo-icon">📚</span>
-                    <span>Note Library</span>
+                    <img src="icons/new-icon-192.png" alt="Logo" class="logo-img">
+                    <span class="logo-text">Note Library</span>
                 </div>
             </div>
             <div class="header-actions">
@@ -49,13 +53,30 @@
                         <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path>
                     </svg>
                 </button>
-                <button id="user-btn" class="user-btn">
-                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path>
-                        <circle cx="12" cy="7" r="4"></circle>
-                    </svg>
-                    <span id="user-name">Sign In</span>
-                </button>
+                <div class="user-auth-container">
+                    <button id="sign-in-btn" class="user-btn">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                            stroke-width="2">
+                            <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"></path>
+                            <polyline points="10 17 15 12 10 7"></polyline>
+                            <line x1="15" y1="12" x2="3" y2="12"></line>
+                        </svg>
+                        <span>Sign In</span>
+                    </button>
+
+                    <div id="user-profile" class="user-profile" style="display: none;">
+                        <img id="user-avatar" src="" alt="User" class="user-avatar">
+                        <span id="user-name-display" class="user-name-display"></span>
+                        <button id="sign-out-btn" class="sign-out-icon-btn" title="Sign Out">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                                stroke-width="2">
+                                <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path>
+                                <polyline points="16 17 21 12 16 7"></polyline>
+                                <line x1="21" y1="12" x2="9" y2="12"></line>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
             </div>
         </div>
     </header>
@@ -102,6 +123,16 @@
                         <path d="m21 21-4.35-4.35"></path>
                     </svg>
                     <input type="text" id="search-input" placeholder="Search notes by name..." class="search-input">
+                </div>
+                <div class="sort-container">
+                    <select id="sort-select" class="sort-select" aria-label="Sort notes">
+                        <option value="newest">Newest First</option>
+                        <option value="oldest">Oldest First</option>
+                        <option value="name-asc">Name (A-Z)</option>
+                        <option value="name-desc">Name (Z-A)</option>
+                        <option value="size-desc">Size (Large-Small)</option>
+                        <option value="size-asc">Size (Small-Large)</option>
+                    </select>
                 </div>
                 <button id="upload-btn" class="upload-btn">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -208,6 +239,24 @@
             </div>
         </div>
     </div>
+    <!-- PDF Preview Modal -->
+    <div id="pdf-modal" class="modal" style="display: none;">
+        <div class="modal-content modal-fullscreen">
+            <div class="modal-header">
+                <h2 id="pdf-modal-title" class="truncate">Document Preview</h2>
+                <button id="close-pdf-btn" class="icon-btn-small" aria-label="Close Preview">
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
+            <div class="modal-body pdf-body">
+                <iframe id="pdf-frame" src="" frameborder="0" width="100%" height="100%"></iframe>
+            </div>
+        </div>
+    </div>
+
     <script src="https://accounts.google.com/gsi/client"></script>
     <script src="https://apis.google.com/js/api.js"></script>
 
@@ -215,6 +264,17 @@
     <script src="js/auth.js"></script>
     <script src="js/drive.js"></script>
     <script src="js/ui.js"></script>
+
+    <!-- PWA Support -->
+    <script>
+        if ('serviceWorker' in navigator) {
+            window.addEventListener('load', () => {
+                navigator.serviceWorker.register('./sw.js')
+                    .then(reg => console.log('✅ Service Worker Registered'))
+                    .catch(err => console.log('❌ SW Registration Failed:', err));
+            });
+        }
+    </script>
 </body>
 
 </html>

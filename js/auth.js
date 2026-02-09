@@ -37,7 +37,7 @@ const CLIENT_ID = '26955947407-qe8q0i1hdnu86b9oa8shd208gbt3k38b.apps.googleuserc
  * - drive.file: Access to files created/opened by this app
  * - drive.metadata.readonly: Read file metadata
  */
-const SCOPES = 'https://www.googleapis.com/auth/drive';
+const SCOPES = 'https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/userinfo.profile';
 
 // Discovery docs for Google Drive API
 const DISCOVERY_DOCS = ['https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'];
@@ -156,32 +156,86 @@ function handleSignoutClick() {
     if (token !== null) {
         google.accounts.oauth2.revoke(token.access_token);
         gapi.client.setToken('');
-        updateSignInStatus(false);
-        showToast('Signed out successfully', 'success');
+    }
 
-        // Clear local storage tokens
-        localStorage.removeItem('gdrive_token');
-        localStorage.removeItem('gdrive_token_expiry');
+    updateSignInStatus(false);
+    showToast('Signed out successfully', 'success');
 
-        // Clear notes display
-        document.getElementById('notes-grid').innerHTML = '';
-        document.getElementById('empty-state').style.display = 'flex';
+    // Clear local storage tokens
+    localStorage.removeItem('gdrive_token');
+    localStorage.removeItem('gdrive_token_expiry');
+    localStorage.removeItem('user_profile');
+
+    // Clear notes display
+    const notesGrid = document.getElementById('notes-grid');
+    const emptyState = document.getElementById('empty-state');
+    if (notesGrid) notesGrid.innerHTML = '';
+    if (emptyState) emptyState.style.display = 'flex';
+}
+
+/**
+ * Fetch user profile from Google
+ */
+async function fetchUserProfile(accessToken) {
+    try {
+        const response = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', {
+            headers: {
+                'Authorization': `Bearer ${accessToken}`
+            }
+        });
+
+        if (!response.ok) {
+            throw new Error('Failed to fetch user profile');
+        }
+
+        return await response.json();
+    } catch (error) {
+        console.error('Error fetching user profile:', error);
+        return null;
     }
 }
 
 /**
  * Update UI based on sign-in status
  */
-function updateSignInStatus(isSignedIn) {
-    const userBtn = document.getElementById('user-btn');
-    const userName = document.getElementById('user-name');
+async function updateSignInStatus(isSignedIn) {
+    const signInBtn = document.getElementById('sign-in-btn');
+    const userProfile = document.getElementById('user-profile');
+    const userAvatar = document.getElementById('user-avatar');
+    const userNameDisplay = document.getElementById('user-name-display');
+    const signOutBtn = document.getElementById('sign-out-btn');
 
     if (isSignedIn) {
-        userName.textContent = 'Sign Out';
-        userBtn.onclick = handleSignoutClick;
+        if (signInBtn) signInBtn.style.display = 'none';
+        if (userProfile) userProfile.style.display = 'flex';
+
+        if (signOutBtn) signOutBtn.onclick = handleSignoutClick;
+
+        // Fetch profile
+        const token = getAccessToken() || localStorage.getItem('gdrive_token');
+        if (token) {
+            // Try cache first for instant UI
+            const cached = JSON.parse(localStorage.getItem('user_profile') || '{}');
+            if (cached.picture && userAvatar) userAvatar.src = cached.picture;
+            if (cached.name && userNameDisplay) userNameDisplay.textContent = cached.given_name || cached.name;
+
+            // Fetch fresh
+            const profile = await fetchUserProfile(token);
+            if (profile) {
+                const pic = profile.picture || `https://ui-avatars.com/api/?name=${encodeURIComponent(profile.name)}&background=random`;
+                if (userAvatar) userAvatar.src = pic;
+                if (userNameDisplay) userNameDisplay.textContent = profile.given_name || profile.name;
+                localStorage.setItem('user_profile', JSON.stringify(profile));
+            }
+        }
     } else {
-        userName.textContent = 'Sign In';
-        userBtn.onclick = handleAuthClick;
+        if (signInBtn) {
+            signInBtn.style.display = 'flex';
+            signInBtn.onclick = handleAuthClick;
+        }
+        if (userProfile) userProfile.style.display = 'none';
+        if (userAvatar) userAvatar.src = '';
+        if (userNameDisplay) userNameDisplay.textContent = '';
     }
 }
 

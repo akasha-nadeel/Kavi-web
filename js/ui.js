@@ -14,6 +14,7 @@
 
 // Global state
 let currentSubject = 'all';
+let currentSort = 'newest';
 let allNotes = [];
 let pendingFiles = [];
 
@@ -34,6 +35,15 @@ function initUI() {
         const searchInput = document.getElementById('search-input');
         if (searchInput) {
             searchInput.addEventListener('input', handleSearch);
+        }
+
+        // Sort functionality
+        const sortSelect = document.getElementById('sort-select');
+        if (sortSelect) {
+            sortSelect.addEventListener('change', (e) => {
+                currentSort = e.target.value;
+                filterAndDisplayNotes();
+            });
         }
 
         // Upload button
@@ -114,13 +124,37 @@ function initUI() {
             });
         }
 
-        updateSidebarNav();
+        // PDF Preview Modal
+        const pdfModal = document.getElementById('pdf-modal');
+        const closePdfBtn = document.getElementById('close-pdf-btn');
 
-        // Mobile Menu Toggle
+        if (pdfModal && closePdfBtn) {
+            closePdfBtn.addEventListener('click', () => {
+                const iframe = document.getElementById('pdf-frame');
+                if (iframe.src) {
+                    // Start loading about:blank to clear
+                    iframe.src = '';
+                    // Revoke not strictly available on element property without tracking, but we can just clear src
+                }
+                pdfModal.style.display = 'none';
+            });
+
+            window.addEventListener('click', (e) => {
+                if (e.target === pdfModal) {
+                    const iframe = document.getElementById('pdf-frame');
+                    if (iframe.src) {
+                        iframe.src = '';
+                    }
+                    pdfModal.style.display = 'none';
+                }
+            });
+        }
+
+        // Mobile Menu Toggle - Initialize BEFORE other components to ensure responsiveness
         const menuToggle = document.getElementById('menu-toggle');
         const sidebar = document.querySelector('.sidebar');
 
-        // Add overlay element dynamically
+        // Add overlay element dynamically if it doesn't exist
         let overlay = document.querySelector('.sidebar-overlay');
         if (!overlay) {
             overlay = document.createElement('div');
@@ -129,24 +163,39 @@ function initUI() {
         }
 
         if (menuToggle && sidebar) {
-            menuToggle.addEventListener('click', () => {
+            console.log('📱 initializing mobile menu toggle');
+
+            // Ensure any existing listeners don't create duplicates (though unlikely in initUI)
+            // Use cloneNode or separate function? No, initUI runs once.
+
+            menuToggle.addEventListener('click', (e) => {
+                e.stopPropagation(); // prevent bubbling issues
+                console.log('📱 menu toggle clicked');
                 sidebar.classList.toggle('active');
-                overlay.classList.toggle('active');
+                if (overlay) overlay.classList.toggle('active');
             });
 
-            overlay.addEventListener('click', () => {
-                sidebar.classList.remove('active');
-                overlay.classList.remove('active');
-            });
-
-            // Close sidebar when clicking a nav item on mobile
-            // Use delegation or re-select since updateSidebarNav rebuilds DOM
-            sidebar.addEventListener('click', (e) => {
-                if (window.innerWidth <= 768 && e.target.closest('.nav-item')) {
+            if (overlay) {
+                overlay.addEventListener('click', () => {
                     sidebar.classList.remove('active');
                     overlay.classList.remove('active');
+                });
+            }
+
+            // Close sidebar when clicking a nav item on mobile
+            sidebar.addEventListener('click', (e) => {
+                if (window.innerWidth <= 768 && e.target.closest('.nav-item')) {
+                    // Check if it's NOT the toggle button itself (though distinct)
+                    sidebar.classList.remove('active');
+                    if (overlay) overlay.classList.remove('active');
                 }
             });
+        }
+
+        try {
+            updateSidebarNav();
+        } catch (e) {
+            console.error('Failed to update sidebar nav:', e);
         }
 
         // Drag and drop
@@ -216,16 +265,19 @@ function handleNavClick(item) {
 /**
  * Handle search
  */
+/**
+ * Handle search
+ */
 function handleSearch(e) {
-    const searchTerm = e.target.value.toLowerCase().trim();
-    filterAndDisplayNotes(searchTerm);
+    filterAndDisplayNotes();
 }
 
 /**
  * Filter and display notes
  */
-function filterAndDisplayNotes(searchTerm = '') {
-    let filteredNotes = allNotes;
+function filterAndDisplayNotes() {
+    let filteredNotes = [...allNotes]; // Create copy
+    const searchTerm = document.getElementById('search-input')?.value.toLowerCase().trim() || '';
 
     // Filter by subject
     if (currentSubject !== 'all') {
@@ -238,6 +290,32 @@ function filterAndDisplayNotes(searchTerm = '') {
             note.name.toLowerCase().includes(searchTerm)
         );
     }
+
+    // Sort: Favorites first, then selected criteria
+    filteredNotes.sort((a, b) => {
+        // Favorites always on top
+        if (a.isFavorite !== b.isFavorite) {
+            return a.isFavorite ? -1 : 1;
+        }
+
+        // Secondary sort
+        switch (currentSort) {
+            case 'newest':
+                return new Date(b.createdTime) - new Date(a.createdTime);
+            case 'oldest':
+                return new Date(a.createdTime) - new Date(b.createdTime);
+            case 'name-asc':
+                return a.name.localeCompare(b.name);
+            case 'name-desc':
+                return b.name.localeCompare(a.name);
+            case 'size-desc':
+                return b.size - a.size;
+            case 'size-asc':
+                return a.size - b.size;
+            default:
+                return 0;
+        }
+    });
 
     // Display notes
     displayNotes(filteredNotes);
@@ -358,8 +436,22 @@ function displayNotes(notes) {
 
         // View button
         card.querySelector('.view-btn').addEventListener('click', () => {
-            window.drive.viewFile(note.webViewLink);
+            window.drive.previewFile(note.id, note.name);
         });
+
+        // Favorite button
+        const favBtn = card.querySelector('.favorite-btn');
+        if (favBtn) {
+            favBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                const isFav = window.drive.toggleFavorite(note.id);
+                note.isFavorite = isFav;
+
+                // Re-sort and display using current criteria
+                filterAndDisplayNotes();
+                showToast(isFav ? 'Pinned to top' : 'Unpinned', 'success');
+            });
+        }
 
         // Download button
         card.querySelector('.download-btn').addEventListener('click', () => {
@@ -383,10 +475,21 @@ function displayNotes(notes) {
  * Create PDF card HTML
  */
 function createPDFCard(note) {
-    return `
-        <div class="pdf-card">
+    let previewHtml = '';
+
+    // Check if thumbnail exists
+    if (note.thumbnailLink) {
+        // Use the thumbnail link provided by Google Drive API (force higher resolution s800)
+        previewHtml = `
+            <div class="pdf-preview-img-container">
+                <img src="${note.thumbnailLink.replace(/=s\d+.*$/, '=s800')}" alt="${note.name}" loading="lazy" class="pdf-preview-img" onerror="this.onerror=null; this.parentElement.parentElement.innerHTML='<div class=\\'pdf-icon\\'><svg width=\\'40\\' height=\\'40\\' viewBox=\\'0 0 24 24\\' fill=\\'none\\' stroke=\\'currentColor\\' stroke-width=\\'2\\'><path d=\\'M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z\\'></path><polyline points=\\'14 2 14 8 20 8\\'></polyline><line x1=\\'16\\' y1=\\'13\\' x2=\\'8\\' y2=\\'13\\'></line><line x1=\\'16\\' y1=\\'17\\' x2=\\'8\\' y2=\\'17\\'></line><polyline points=\\'10 9 9 9 8 9\\'></polyline></svg></div>'">
+            </div>
+        `;
+    } else {
+        // Fallback to Icon
+        previewHtml = `
             <div class="pdf-icon">
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
                     <polyline points="14 2 14 8 20 8"></polyline>
                     <line x1="16" y1="13" x2="8" y2="13"></line>
@@ -394,38 +497,56 @@ function createPDFCard(note) {
                     <polyline points="10 9 9 9 8 9"></polyline>
                 </svg>
             </div>
-            <div class="pdf-info">
-                <h3>${note.name}</h3>
-                <div class="pdf-meta">
-                    <span>${window.drive.formatFileSize(note.size)}</span>
-                    <span>•</span>
-                    <span>${window.drive.formatDate(note.createdTime)}</span>
-                </div>
-                <span class="pdf-subject">${note.subject}</span>
+        `;
+    }
+
+    const isFav = note.isFavorite;
+    const favIcon = isFav
+        ? `<svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="none"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>`
+        : `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg>`;
+
+    return `
+        <div class="pdf-card">
+            <div class="pdf-preview">
+                ${previewHtml}
+                <button class="favorite-btn ${isFav ? 'active' : ''}" title="${isFav ? 'Unpin' : 'Pin to top'}">
+                    ${favIcon}
+                </button>
             </div>
-            <div class="pdf-actions">
-                <button class="action-btn view-btn" title="View in Google Drive">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-                        <circle cx="12" cy="12" r="3"></circle>
-                    </svg>
-                    View
-                </button>
-                <button class="action-btn download-btn" title="Download PDF">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                        <polyline points="7 10 12 15 17 10"></polyline>
-                        <line x1="12" y1="15" x2="12" y2="3"></line>
-                    </svg>
-                    Download
-                </button>
-                <button class="action-btn delete-btn" title="Delete PDF">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <polyline points="3 6 5 6 21 6"></polyline>
-                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                    </svg>
-                    Delete
-                </button>
+            <div class="pdf-content">
+                <div class="pdf-info">
+                    <h3>${note.name}</h3>
+                    <div class="pdf-meta">
+                        <span>${window.drive.formatFileSize(note.size)}</span>
+                        <span>•</span>
+                        <span>${window.drive.formatDate(note.createdTime)}</span>
+                    </div>
+                    <span class="pdf-subject">${note.subject}</span>
+                </div>
+                <div class="pdf-actions">
+                    <button class="action-btn view-btn" title="View in Google Drive">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                            <circle cx="12" cy="12" r="3"></circle>
+                        </svg>
+                        View
+                    </button>
+                    <button class="action-btn download-btn" title="Download PDF">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                            <polyline points="7 10 12 15 17 10"></polyline>
+                            <line x1="12" y1="15" x2="12" y2="3"></line>
+                        </svg>
+                        Download
+                    </button>
+                    <button class="action-btn delete-btn" title="Delete PDF">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polyline points="3 6 5 6 21 6"></polyline>
+                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                        </svg>
+                        Delete
+                    </button>
+                </div>
             </div>
         </div>
     `;
@@ -495,15 +616,67 @@ function renderSubjectsList() {
     list.innerHTML = subjects.map(subject => `
         <div class="subject-item">
             <span>${subject}</span>
-            <button class="remove-subject-btn" onclick="handleRemoveSubject('${subject}')" aria-label="Remove subject">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <line x1="18" y1="6" x2="6" y2="18"></line>
-                    <line x1="6" y1="6" x2="18" y2="18"></line>
-                </svg>
-            </button>
+            <div class="subject-actions">
+                <button class="rename-btn" onclick="handleRenameSubject('${subject}')" aria-label="Rename subject" title="Rename">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
+                        <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
+                    </svg>
+                </button>
+                <button class="remove-subject-btn" onclick="handleRemoveSubject('${subject}')" aria-label="Remove subject" title="Remove">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                        <line x1="6" y1="6" x2="18" y2="18"></line>
+                    </svg>
+                </button>
+            </div>
         </div>
     `).join('');
 }
+
+/**
+ * Handle renaming a subject
+ */
+window.handleRenameSubject = async function (oldName) {
+    const newName = prompt(`Rename subject "${oldName}" to:`, oldName);
+    if (newName && newName.trim() !== oldName) {
+        const finalName = newName.trim();
+        const success = await window.drive.renameSubject(oldName, finalName);
+        if (success) {
+            showToast(`Renamed to "${finalName}"`, 'success');
+            renderSubjectsList();
+            updateSidebarNav();
+            updateSubjectButtons();
+
+            // Check if active subject was renamed
+            if (currentSubject === oldName) {
+                currentSubject = finalName;
+                updateSidebarNav();
+
+                // Update local notes subject property
+                if (allNotes) {
+                    allNotes.forEach(note => {
+                        if (note.subject === oldName) {
+                            note.subject = finalName;
+                        }
+                    });
+                    // Redisplay
+                    filterAndDisplayNotes();
+                }
+            } else {
+                if (allNotes) {
+                    allNotes.forEach(note => {
+                        if (note.subject === oldName) {
+                            note.subject = finalName;
+                        }
+                    });
+                }
+            }
+        } else {
+            showToast('Rename failed or name already exists', 'error');
+        }
+    }
+};
 
 /**
  * Update subject selection buttons
@@ -669,6 +842,28 @@ window.handleDeletePermanently = async function (fileId, fileName) {
 };
 
 window.loadAllNotes = loadAllNotes;
+
+
+/**
+ * Show PDF Modal
+ */
+function showPDFModal(url, title) {
+    const pdfModal = document.getElementById('pdf-modal');
+    const pdfFrame = document.getElementById('pdf-frame');
+    const modalTitle = document.getElementById('pdf-modal-title');
+
+    if (pdfModal && pdfFrame) {
+        pdfFrame.src = url;
+        if (modalTitle) modalTitle.textContent = title;
+        pdfModal.style.display = 'flex';
+    } else {
+        window.open(url, '_blank');
+    }
+}
+
+// Expose to window.ui
+window.ui = window.ui || {};
+window.ui.showPDFModal = showPDFModal;
 
 // Initialize when DOM is ready
 document.addEventListener('DOMContentLoaded', initUI);

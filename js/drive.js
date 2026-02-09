@@ -27,6 +27,34 @@ const ROOT_FOLDER_NAME = 'Campus Notes Library';
 // Subject folders
 let SUBJECTS = JSON.parse(localStorage.getItem('campus_notes_subjects')) || ['Programming', 'Mathematics', 'Database', 'Networks', 'Algorithms'];
 
+// Favorites
+let FAVORITES = JSON.parse(localStorage.getItem('campus_notes_favorites')) || [];
+
+function saveFavorites() {
+    localStorage.setItem('campus_notes_favorites', JSON.stringify(FAVORITES));
+}
+
+/**
+ * Toggle Favorite status
+ */
+function toggleFavorite(fileId) {
+    const index = FAVORITES.indexOf(fileId);
+    let isFav = false;
+    if (index > -1) {
+        FAVORITES.splice(index, 1);
+        isFav = false;
+    } else {
+        FAVORITES.push(fileId);
+        isFav = true;
+    }
+    saveFavorites();
+    return isFav;
+}
+
+function isFavorite(fileId) {
+    return FAVORITES.includes(fileId);
+}
+
 /**
  * Save subjects to local storage
  */
@@ -65,6 +93,47 @@ function removeSubject(subjectName) {
     if (index > -1) {
         SUBJECTS.splice(index, 1);
         saveSubjects();
+        return true;
+    }
+    return false;
+}
+
+/**
+ * Rename a subject
+ */
+async function renameSubject(oldName, newName) {
+    if (!newName || SUBJECTS.includes(newName)) {
+        return false;
+    }
+
+    const index = SUBJECTS.indexOf(oldName);
+    if (index > -1) {
+        // Update local list
+        SUBJECTS[index] = newName;
+        saveSubjects();
+
+        // Update Drive Folder
+        if (window.auth.isAuthenticated()) {
+            try {
+                // Get ID of old folder
+                const folderId = await getSubjectFolder(oldName);
+                if (folderId) {
+                    // Update name in Drive
+                    await gapi.client.drive.files.update({
+                        fileId: folderId,
+                        resource: { name: newName }
+                    });
+
+                    // Update Cache: remove old key, add new key with same ID
+                    delete folderCache[oldName];
+                    folderCache[newName] = folderId;
+                    console.log(`✅ Renamed folder: ${oldName} -> ${newName}`);
+                }
+            } catch (error) {
+                console.error('❌ Error naming Drive folder:', error);
+                // Proceed anyway as local update succeeded
+            }
+        }
         return true;
     }
     return false;
@@ -210,7 +279,7 @@ async function listPDFsBySubject(subjectName) {
 
         const response = await gapi.client.drive.files.list({
             q: `'${folderId}' in parents and mimeType='application/pdf' and trashed=false`,
-            fields: 'files(id, name, mimeType, createdTime, size, webViewLink, webContentLink)',
+            fields: 'files(id, name, mimeType, createdTime, size, webViewLink, webContentLink, thumbnailLink)',
             orderBy: 'createdTime desc',
             spaces: 'drive'
         });
@@ -240,12 +309,18 @@ async function listAllPDFs() {
             // Add subject info to each file
             files.forEach(file => {
                 file.subject = subject;
+                file.isFavorite = FAVORITES.includes(file.id);
             });
             allFiles.push(...files);
         }
 
-        // Sort by creation time (newest first)
-        allFiles.sort((a, b) => new Date(b.createdTime) - new Date(a.createdTime));
+        // Sort: Favorites first, then Data (Newest First)
+        allFiles.sort((a, b) => {
+            if (a.isFavorite === b.isFavorite) {
+                return new Date(b.createdTime) - new Date(a.createdTime);
+            }
+            return a.isFavorite ? -1 : 1;
+        });
 
         return allFiles;
     } catch (error) {
@@ -327,10 +402,47 @@ async function downloadFile(fileId, fileName) {
 }
 
 /**
- * View a file in Google Drive
+ * View a file in Google Drive (Legacy)
  */
 function viewFile(webViewLink) {
     window.open(webViewLink, '_blank');
+}
+
+/**
+ * Preview file in generic modal
+ */
+async function previewFile(fileId, fileName) {
+    if (!window.auth.isAuthenticated()) {
+        showToast('Please sign in first', 'warning');
+        return;
+    }
+
+    try {
+        showLoading(true);
+        const accessToken = window.auth.getAccessToken();
+        const response = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+            headers: new Headers({ 'Authorization': 'Bearer ' + accessToken })
+        });
+
+        if (response.ok) {
+            const blob = await response.blob();
+            const pdfBlob = new Blob([blob], { type: 'application/pdf' });
+            const url = window.URL.createObjectURL(pdfBlob);
+
+            if (window.ui && window.ui.showPDFModal) {
+                window.ui.showPDFModal(url, fileName);
+            } else {
+                window.open(url, '_blank');
+            }
+        } else {
+            throw new Error('Preview failed');
+        }
+    } catch (error) {
+        console.error('❌ Error previewing file:', error);
+        showToast('Failed to load preview', 'error');
+    } finally {
+        showLoading(false);
+    }
 }
 
 /**
@@ -375,7 +487,7 @@ async function listTrashedFiles() {
     try {
         const response = await gapi.client.drive.files.list({
             q: "trashed=true and mimeType='application/pdf'",
-            fields: 'files(id, name, mimeType, createdTime, size, webViewLink, webContentLink)',
+            fields: 'files(id, name, mimeType, createdTime, size, webViewLink, webContentLink, thumbnailLink)',
             orderBy: 'modifiedTime desc',
             spaces: 'drive'
         });
@@ -441,6 +553,7 @@ window.drive = {
     deleteFile,
     downloadFile,
     viewFile,
+    previewFile,
     formatFileSize,
     formatDate,
     getSubjects,
@@ -449,5 +562,8 @@ window.drive = {
     listTrashedFiles,
     restoreFile,
     deletePermanently,
+    toggleFavorite,
+    isFavorite,
+    renameSubject,
     SUBJECTS
 };
